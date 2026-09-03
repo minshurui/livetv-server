@@ -1,0 +1,21 @@
+# 编译产物与二进制
+/livetv
+*.tmp
+*.bak
+# 诊断残留
+/ct.bak
+/tools/frames/
+/tools/*/flvwatch
+/tools/flvwatch
+/tools/gapwatch
+/tools/conncompare/conncompare
+/tools/flvanalyze
+*.png
+# 测试辅助
+.flv
+# 日志
+*.log
+# 环境/敏感
+.env
+.env.*
+credentials*
