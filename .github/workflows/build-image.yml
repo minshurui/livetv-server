@@ -1,18 +1,29 @@
-name: Build & Push Docker Images
+name: Build & Push Docker Images (Docker Hub + Aliyun)
 
-# 触发: 推送代码 或 手动触发
+# 触发: 推送代码 或 手动触发(重建)
 on:
   push:
     branches: [main]
     paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
-  workflow_dispatch:        # 支持 GitHub 页面手动触发
+  workflow_dispatch:                 # GitHub 页面手动触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+
+    # ⚠ 前置配置: GitHub 仓库 → Settings → Secrets and variables → Actions 新增:
+    #   Docker Hub(必配, 否则跳过推送):
+    #     DOCKERHUB_USERNAME = minshurui
+    #     DOCKERHUB_TOKEN    = Docker Hub Access Token(https://hub.docker.com/settings/security)
+    #   阿里云容器镜像 ACR(选配; 配了才推阿里云):
+    #     ALIYUN_REGISTRY   = registry.cn-hangzhou.aliyuncs.com
+    #     ALIYUN_NAMESPACE  = <你的命名空间>
+    #     ALIYUN_REPO       = livetv-allinone
+    #     ALIYUN_USERNAME   = <ACR 账号>
+    #     ALIYUN_PASSWORD   = <ACR 密码>
+    # 配好后点击 Actions 页右侧 "Run workflow" 手动触发, 或 push main 自动触发。
 
     steps:
       - name: Checkout livetv 仓库
@@ -22,38 +33,61 @@ jobs:
       - name: Clone guovern/iptv-api
         run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
 
-      # 一次性 clone 优化(可剔除, 保持简单)
-
-      # Docker 环境 (含 buildx 多架构支持)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # QEMU 模拟 (arm64/arm 交叉构建)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # 登录 Docker Hub (凭据从 GitHub Secrets: 手动触发/CI 注入)
-      # 需要先在仓库 Settings → Secrets 配置:
-      #   DOCKERHUB_USERNAME = minshurui
-      #   DOCKERHUB_TOKEN    = Docker Hub Access Token
+      # ---- 登录 Docker Hub(已配才执行)----
       - name: Login to Docker Hub
         uses: docker/login-action@v3
+        if: secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 双端构建 + 推送 (amd64 + arm64)
-      - name: Build and push multi-arch
+      # ---- 登录阿里云 ACR(已配才执行)----
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        if: secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != ''
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      # ---- 单步按需双推: 应用多个 login 后, 分别推 Docker Hub 与阿里云 ----
+      # 用两次 build-push-action(第二次只推阿里云 tag), 规避空 tag 污染
+
+      - name: Build & push (Docker Hub)
         uses: docker/build-push-action@v6
+        if: secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            minshurui/livetv-allinone:latest
-            minshurui/livetv-allinone:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:${{ github.sha }}
           build-args: |
             BUILD_PROXY=
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push (Aliyun ACR)
+        uses: docker/build-push-action@v6
+        if: secrets.ALIYUN_REGISTRY != '' && secrets.ALIYUN_NAMESPACE != '' && secrets.ALIYUN_REPO != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != ''
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ secrets.ALIYUN_REPO }}:latest
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ secrets.ALIYUN_REPO }}:${{ github.sha }}
+          build-args: |
+            BUILD_PROXY=
+          # 复用 Docker Hub 步的构建缓存, 避免重复编译
           cache-from: type=gha
           cache-to: type=gha,mode=max
