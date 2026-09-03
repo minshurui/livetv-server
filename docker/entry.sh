@@ -111,6 +111,24 @@ else
 fi
 
 # ============================================================
+# 4.5 直播白名单自动同步(自研 sync_channels.py, 官方API抓取)=
+# ============================================================
+# 首启: 后台同步一次, 不阻塞服务启动(失败则保留已有/空白名单, Go 全量保底)
+if [ -f /opt/livetv/sync_channels.py ]; then
+  echo "[entry] 同步直播白名单(官方API, 后台)..."
+  python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json"     >> "$DATA/logs/sync-channels.log" 2>&1 &
+  # cron 每6小时刷新一次(保持房间列表新鲜)
+  cat > /etc/periodic/6h/sync-channels <<'SYNCEOF'
+#!/bin/sh
+python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json"   >> "$DATA/logs/sync-channels.log" 2>&1
+SYNCEOF
+  chmod +x /etc/periodic/6h/sync-channels 2>/dev/null
+  echo "[entry]   首次同步已后台启动 + 每6小时cron"
+else
+  echo "[entry]   ⚠ sync_channels.py 缺失, 跳过白名单同步(用预置/空白名单)"
+fi
+
+# ============================================================
 # 5. 电视源自愈 crond ========================================
 # ============================================================
 echo "[entry] 启动 crond (电视源自愈 + iptv-api输出桥接)"

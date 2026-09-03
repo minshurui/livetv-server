@@ -71,6 +71,7 @@ RUN if [ "$WITH_FFMPEG" = "1" ]; then \
 # 自研服务
 COPY --from=gobuild /livetv /usr/local/bin/livetv
 COPY docker/allinone.py /opt/livetv/allinone.py
+COPY docker/sync_channels.py /opt/livetv/sync_channels.py
 COPY docker/stream-proxy.py /opt/livetv/stream-proxy.py
 COPY docker/scripts/ /opt/livetv/scripts/
 COPY docker/entry.sh /opt/livetv/entry.sh
@@ -88,9 +89,10 @@ RUN rm -rf $APP_WORKDIR/docs $APP_WORKDIR/tests \
        $APP_WORKDIR/desktop_ui $APP_WORKDIR/tkinter_ui \
        $APP_WORKDIR/utils/nginx-rtmp-win32 \
        $APP_WORKDIR/.pytest_cache \
-  && find $APP_WORKDIR/.venv -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null \
-  && find $APP_WORKDIR -name "*.pyc" -delete 2>/dev/null \
-  && rm -rf /root/.cache /var/cache/apk/*
+       /root/.cache /var/cache/apk/* \
+  && find $APP_WORKDIR -type d -name __pycache__ -prune -delete 2>/dev/null || true \
+  && find $APP_WORKDIR -type f -name "*.pyc" -delete 2>/dev/null || true
+
 
 VOLUME ["/data"]
 
