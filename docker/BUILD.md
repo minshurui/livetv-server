@@ -34,7 +34,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 ## 单架构快速验证 (仅 amd64)
 ```bash
-docker build -t minshurui/livetv-allinone:test .
+# 若 nginx.org/github 下载慢/被墙, 传代理: --build-arg BUILD_PROXY=http://代理:端口
+docker build --build-arg BUILD_PROXY=http://100.105.60.99:7890 -t minshurui/livetv-allinone:test .
 docker run -d --name t -p 8081:8081 -p 8080:8080 minshurui/livetv-allinone:test
 curl localhost:8081/healthz
 ```
