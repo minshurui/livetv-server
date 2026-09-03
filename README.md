@@ -69,9 +69,26 @@ tail -f ~/lnmp/logs/iptv-sync.log # 电视源自愈日志
 
 ## 🐳 Docker 单容器部署 (livetv-allinone)
 
-一键打包全部服务进单个 Alpine 容器，支持 amd64/arm64/arm (任何有 Docker 的平台)。
+一键打包全部服务进单个 Alpine 容器，支持 amd64/arm64 (任何有 Docker 的平台)。
 
 整合: 自研 Go livetv + Python 虎牙 + 反代 nginx + 开源 guovern/iptv-api(电视源自愈)。
+
+### 方式 A: GitHub Actions 自动构建(推荐)
+
+仓库已配置 [`build-image.yml`](.github/workflows/build-image.yml) 工作流,推 `main` 或手动触发即**自动构建 amd64+arm64 双端镜像**并推送到:
+
+- **Docker Hub** `minshurui/livetv-allinone:latest`
+- **阿里云 ACR**(需配置下列 Secrets 才推)
+
+首次使用需在 GitHub → Settings → Secrets 配置:
+```
+DOCKERHUB_USERNAME / DOCKERHUB_TOKEN        # Docker Hub 访问令牌
+ALIYUN_REGISTRY / ALIYUN_NAMESPACE / ALIYUN_REPO
+ALIYUN_USERNAME / ALIYUN_PASSWORD           # 阿里云容器镜像(可选)
+```
+配好后点 Actions → Run workflow 即自动构建,无需本地 Docker。
+
+### 方式 B: 本地构建(备选)
 
 ```bash
 # 1. 前置: clone iptv-api (构建依赖)
@@ -79,7 +96,7 @@ git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
 
 # 2. 在 WSL Ubuntu(或任何有 docker 的机器) 构建
 docker build -t minshurui/livetv-allinone:latest .
-# 多架构: 见 docker/BUILD.md
+# 双架构见 docker/BUILD.md
 
 # 3. 运行
 docker compose -f docker/docker-compose.yml up -d
