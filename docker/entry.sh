@@ -102,7 +102,7 @@ echo "[entry]   虎牙FLV pid=$!"
 # 4. 自研 nginx (8081 反代 allinone.m3u) =====================
 # ============================================================
 echo "[entry] 启动 nginx 反代 (8081)"
-if [ -f /etc/nginx/conf.d/livetv.conf ]; then
+if [ -f /etc/nginx/livetv/nginx.conf ]; then
   nginx -p /etc/nginx/livetv -c /etc/nginx/livetv/nginx.conf -g "daemon off;" >> "$DATA/logs/nginx.log" 2>&1 &
   echo $! > /run/nginx.pid
   echo "[entry]   nginx pid=$!"

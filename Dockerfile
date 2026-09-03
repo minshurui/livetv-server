@@ -77,12 +77,20 @@ COPY docker/entry.sh /opt/livetv/entry.sh
 COPY docker/nginx/livetv-nginx.conf /etc/nginx/livetv/nginx.conf
 RUN chmod +x /opt/livetv/entry.sh /opt/livetv/scripts/*.sh
 
-# 开源 guovern/iptv-api
+# 开源 guovern/iptv-api (精细 COPY + 移除冗余, 比官方全量 COPY 更小)
 WORKDIR $APP_WORKDIR
 COPY src/iptv-api/ $APP_WORKDIR/
 COPY --from=iptv-builder $APP_WORKDIR/.venv $APP_WORKDIR/.venv
 COPY --from=iptv-builder /usr/local/nginx /usr/local/nginx
 COPY src/iptv-api/nginx.conf.template /etc/nginx/nginx.conf.template
+# 瘦身: 删非运行必需(docs/tests/桌面UI/win32二进制) + venv/pyc 缓存
+RUN rm -rf $APP_WORKDIR/docs $APP_WORKDIR/tests \
+       $APP_WORKDIR/desktop_ui $APP_WORKDIR/tkinter_ui \
+       $APP_WORKDIR/utils/nginx-rtmp-win32 \
+       $APP_WORKDIR/.pytest_cache \
+  && find $APP_WORKDIR/.venv -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null \
+  && find $APP_WORKDIR -name "*.pyc" -delete 2>/dev/null \
+  && rm -rf /root/.cache /var/cache/apk/*
 
 VOLUME ["/data"]
 
