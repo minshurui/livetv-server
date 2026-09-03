@@ -12,12 +12,16 @@ FROM python:3.14-alpine AS iptv-builder
 ARG APP_WORKDIR=/iptv-api
 ARG NGINX_VER=1.27.4
 ARG RTMP_VER=1.2.2
+# 构建网络代理(nginx.org/github 下载用; WSL 走 NAS mihomo, 其他环境可覆盖)
+ARG BUILD_PROXY=http://100.105.60.99:7890
 WORKDIR $APP_WORKDIR
 COPY src/iptv-api/Pipfile* ./
-RUN apk add --no-cache gcc musl-dev python3-dev libffi-dev zlib-dev jpeg-dev wget make pcre-dev openssl-dev curl \
+RUN if [ -n "$BUILD_PROXY" ]; then \
+      export http_proxy=$BUILD_PROXY https_proxy=$BUILD_PROXY HTTP_PROXY=$BUILD_PROXY HTTPS_PROXY=$BUILD_PROXY; \
+    fi; \
+    apk add --no-cache gcc musl-dev python3-dev libffi-dev zlib-dev jpeg-dev wget make pcre-dev openssl-dev curl \
   && pip install --no-cache-dir pipenv \
-  && PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy --system 2>/dev/null \
-  || PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy \
+  && PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy \
   && cd $APP_WORKDIR \
   && wget -q https://nginx.org/download/nginx-${NGINX_VER}.tar.gz && tar xzf nginx-${NGINX_VER}.tar.gz \
   && wget -q https://github.com/arut/nginx-rtmp-module/archive/v${RTMP_VER}.tar.gz && tar xzf v${RTMP_VER}.tar.gz \
@@ -56,13 +60,12 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONIOENCODING=utf-8
 ENV DATA=/data
 
-# 运行时系统包(最小集 + 可选 ffmpeg)
+# 运行时系统包(最小集 + 可选 ffmpeg; nginx 用 iptv-api 编译版, 见 ENV PATH)
 RUN if [ "$WITH_FFMPEG" = "1" ]; then \
       apk add --no-cache ffmpeg; \
     fi \
- && apk add --no-cache pcre nginx curl bash openssh-client busybox-initscripts \
+ && apk add --no-cache pcre curl bash openssh-client \
  && mkdir -p /var/log/nginx /run/nginx /etc/nginx/livetv \
- && rm -f /etc/nginx/http.d/default.conf 2>/dev/null \
  && rm -rf /var/cache/apk/*
 
 # 自研服务
