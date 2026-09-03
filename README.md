@@ -64,3 +64,27 @@ bash start-all.sh start        # 全量启动（含 Python 辅助）
 tail -f ~/lnmp/logs/livetv.log # Go 日志
 tail -f ~/lnmp/logs/iptv-sync.log # 电视源自愈日志
 ```
+
+---
+
+## 🐳 Docker 单容器部署 (livetv-allinone)
+
+一键打包全部服务进单个 Alpine 容器，支持 amd64/arm64/arm (任何有 Docker 的平台)。
+
+整合: 自研 Go livetv + Python 虎牙 + 反代 nginx + 开源 guovern/iptv-api(电视源自愈)。
+
+```bash
+# 1. 前置: clone iptv-api (构建依赖)
+git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
+
+# 2. 在 WSL Ubuntu(或任何有 docker 的机器) 构建
+docker build -t minshurui/livetv-allinone:latest .
+# 多架构: 见 docker/BUILD.md
+
+# 3. 运行
+docker compose -f docker/docker-compose.yml up -d
+```
+
+端口映射: 35455(Go m3u) 19090(斗鱼FLV) 35456/19091(虎牙) 8081(m3u反代) 8080(iptv-api UI)
+
+详见 [`docker/BUILD.md`](docker/BUILD.md)。

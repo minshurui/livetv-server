@@ -19,3 +19,9 @@
 .env
 .env.*
 credentials*
+
+# Docker 构建上下文排除
+/src/iptv-api/
+/data/
+docker/data/
+/resolve.go.tmp
