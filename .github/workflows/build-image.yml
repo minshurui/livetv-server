@@ -1,0 +1,59 @@
+name: Build & Push Docker Images
+
+# 触发: 推送代码 或 手动触发
+on:
+  push:
+    branches: [main]
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
+  workflow_dispatch:        # 支持 GitHub 页面手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout livetv 仓库
+        uses: actions/checkout@v4
+
+      # 前置: clone iptv-api(构建必需, 已 .gitignore)
+      - name: Clone guovern/iptv-api
+        run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
+
+      # 一次性 clone 优化(可剔除, 保持简单)
+
+      # Docker 环境 (含 buildx 多架构支持)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # QEMU 模拟 (arm64/arm 交叉构建)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # 登录 Docker Hub (凭据从 GitHub Secrets: 手动触发/CI 注入)
+      # 需要先在仓库 Settings → Secrets 配置:
+      #   DOCKERHUB_USERNAME = minshurui
+      #   DOCKERHUB_TOKEN    = Docker Hub Access Token
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 双端构建 + 推送 (amd64 + arm64)
+      - name: Build and push multi-arch
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            minshurui/livetv-allinone:latest
+            minshurui/livetv-allinone:${{ github.sha }}
+          build-args: |
+            BUILD_PROXY=
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
