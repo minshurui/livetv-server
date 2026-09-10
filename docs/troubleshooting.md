@@ -354,6 +354,14 @@ ALIYUN_USERNAME
 ALIYUN_PASSWORD
 ```
 
+如果阿里云登录成功、推送时出现：
+
+```text
+unknown manifest class for application/vnd.oci.empty.v1+json
+```
+
+说明当前 ACR 实例不兼容 Buildx 的 provenance/SBOM OCI 附件。项目在阿里云发布步骤中已关闭这两类附件，但仍会发布标准的 amd64/arm64 多架构 manifest；Docker Hub 发布不受影响。
+
 ### buildx / apk 下载失败
 
 先确认失败的是 amd64 还是 arm64 job。最新 Dockerfile 使用固定 digest 的多架构 `iptv-api` 基础镜像，并对 APK 安装重试；不要继续运行旧源码构建提交。

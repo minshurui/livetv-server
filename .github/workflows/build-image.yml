@@ -203,6 +203,10 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # 部分阿里云 ACR 实例不接受 Buildx provenance/SBOM 的 OCI artifact manifest。
+          # 关闭附件不影响 amd64/arm64 镜像及标准多架构 manifest。
+          provenance: false
+          sbom: false
           tags: |
             ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.ALIYUN_REPO }}:latest
             ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.ALIYUN_REPO }}:${{ github.sha }}
