@@ -3,131 +3,204 @@
 [![Build](https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml/badge.svg)](https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml)
 [![Docker Image](https://img.shields.io/docker/v/minshurui/livetv-allinone?label=Docker%20Hub)](https://hub.docker.com/r/minshurui/livetv-allinone)
 
-把虎牙、斗鱼当前开播房间和经过检测的 IPTV 电视源整理成一个 M3U 播放列表。项目提供 Docker 一键部署，支持 `linux/amd64` 和 `linux/arm64`。
+把“当前正在直播的虎牙/斗鱼房间”和“经过检测的 IPTV 电视源”放进同一个 M3U。项目会定时刷新房间、重新解析过期地址、检测斗鱼真实拉流、过滤明显录播/VOD，并在新结果异常时保留上一次可用列表。
 
-最终给播放器使用的地址只有一个：
-
-```text
-http://服务器地址:8081/allinone.m3u
-```
-
-## 它解决什么问题
-
-- 自动获取虎牙、斗鱼官方目录里的当前开播房间。
-- 解析会过期的真实播放地址，播放器不需要保存 CDN 签名。
-- 对斗鱼进行“解析成功 + 实际拉流”两段健康检查。
-- 使用 `iptv-api` 对电视源进行可播放性、速度、分辨率和部分广告占位检测。
-- 发布电视源前再次过滤明显的 VOD 文件、正时长 M3U 项和自定义黑名单。
-- 新结果异常或频道数太少时保留上一次可用列表，不用坏数据覆盖好数据。
-- 配置、输出和日志统一持久化到 `/data`，重启后继续定时更新。
-
-## 三分钟部署
-
-需要 Docker 24+ 和 Docker Compose v2。
-
-```bash
-git clone https://github.com/minshurui/livetv-server.git
-cd livetv-server
-cp docker/.env.example docker/.env
-docker compose -f docker/docker-compose.yml pull
-docker compose -f docker/docker-compose.yml up -d --no-build
-docker compose -f docker/docker-compose.yml ps
-```
-
-确认服务：
-
-```bash
-curl -fsS http://127.0.0.1:8081/healthz
-curl -fsS http://127.0.0.1:8081/allinone.m3u | head
-```
-
-看到 `ok` 和 `#EXTM3U` 后，将下面地址加入支持 M3U 的播放器：
+Docker 镜像支持 `linux/amd64` 和 `linux/arm64`。部署完成后，播放器只需要添加一个地址：
 
 ```text
-http://你的服务器IP或域名:8081/allinone.m3u
+http://服务器IP或域名:8081/allinone.m3u
 ```
 
-首次启动时，虎牙/斗鱼列表通常先出现；电视源需要完成下载和测速，可能需要几分钟到几十分钟。可以继续使用服务，不必反复重启容器。
+> 第一次使用建议先读 [Docker/群晖部署白皮书](docs/docker.md)。里面包含准备工作、复制即用的 Compose、群晖图形界面、端口修改、首次启动、升级、备份和回滚。
 
-## 常用入口
+## 先弄懂这四件事
 
-| 地址 | 用途 | 是否建议公网开放 |
+1. `8081` 提供最终 M3U，但 M3U 里的虎牙和斗鱼会继续访问 `19091`、`19090`，所以这三个端口必须能被播放器访问。
+2. `8080` 是 IPTV 管理页面，不是播放地址，也不建议直接暴露到公网。
+3. 首次启动不会立刻出现全部频道。虎牙/斗鱼通常先出现，IPTV 下载、测速和过滤可能需要几分钟到几十分钟。
+4. 项目能排除失效地址、假响应和明显文件型录播，但无法仅靠网络协议百分之百识别“持续循环且一直生成新分片”的视频。
+
+## 选择部署方式
+
+| 你的设备 | 建议方式 | 最终入口 | 文档 |
+|---|---|---|---|
+| Debian / Ubuntu / 普通 Linux | Docker Compose | `:8081/allinone.m3u` | [Docker 部署](docs/docker.md#方案-a普通-linux一键部署) |
+| 群晖 DSM 7 | Container Manager 项目 | `:8081/allinone.m3u` | [群晖部署](docs/docker.md#方案-b群晖-container-manager) |
+| OpenWrt / iStoreOS | Docker Compose，先检查端口和磁盘 | `:8081/allinone.m3u` | [OpenWrt 注意事项](docs/docker.md#方案-copenwrt--istoreos) |
+| Android / Termux | 本机编译精简模式 | `:35455/allinone.m3u` | [Termux 部署](docs/termux.md) |
+
+Termux 模式不包含完整 `iptv-api` 测速栈；想要最完整功能，优先使用 Docker。
+
+## 五分钟 Docker 部署
+
+下面这份 Compose 不需要下载源码。先创建一个空目录：
+
+```bash
+mkdir -p /opt/livetv
+cd /opt/livetv
+nano compose.yml
+```
+
+粘贴：
+
+```yaml
+services:
+  livetv:
+    image: minshurui/livetv-allinone:latest
+    container_name: livetv
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8081:8081"   # 最终 M3U
+      - "19090:19090" # 斗鱼流代理
+      - "19091:19091" # 虎牙流代理
+      - "8080:8080"   # 可选：IPTV 管理页面
+    environment:
+      TZ: Asia/Shanghai
+      PUBLIC_HOST: ""
+      IPTV_REJECT_VOD: "1"
+      IPTV_MIN_CHANNELS: "20"
+    volumes:
+      - ./data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+启动：
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker logs --tail=100 -f livetv
+```
+
+按 `Ctrl+C` 只是退出日志，不会停止容器。
+
+## 部署后怎样确认可用
+
+先在服务器本机执行：
+
+```bash
+curl -fsS http://127.0.0.1:8081/healthz && echo
+curl -fsS http://127.0.0.1:8081/allinone.m3u | sed -n '1,8p'
+docker inspect --format '{{.State.Health.Status}}' livetv
+```
+
+正确结果应满足：
+
+- `/healthz` 输出 `ok`；
+- M3U 第一行是 `#EXTM3U`；
+- Docker 状态最终变成 `healthy`；
+- 从电视或电脑访问 `http://服务器IP:8081/allinone.m3u` 能下载列表。
+
+如果 M3U 暂时只有头部，先等待首次同步并查看：
+
+```bash
+docker exec livetv tail -n 100 /data/lnmp/logs/sync-channels.log
+docker exec livetv tail -n 100 /data/lnmp/logs/iptv-api-update.log
+docker exec livetv tail -n 100 /data/lnmp/logs/bridge.log
+```
+
+## 端口到底怎么开
+
+| 宿主端口 | 是否必需 | 谁会访问 | 用途 |
+|---:|---|---|---|
+| `8081` | 是 | 播放器 | 下载最终 `allinone.m3u` |
+| `19090` | 使用斗鱼时是 | 播放器 | 斗鱼直播流代理 |
+| `19091` | 使用虎牙时是 | 播放器 | 虎牙直播流代理 |
+| `8080` | 否 | 管理员 | IPTV 页面，建议只在内网使用 |
+| `35455` | 否 | 兼容客户端 | Go 单平台 M3U/解析接口 |
+| `35456` | 否 | 旧客户端 | Python 旧兼容接口 |
+
+例如 NAS 的 `8081` 已被占用，可以改成 `8201:8081`，播放入口随之改成 `http://NAS地址:8201/allinone.m3u`。流代理端口也能改，但必须同步设置公开端口；仓库自带 Compose 会自动处理，详见 [端口修改实例](docs/docker.md#端口冲突时怎么改)。
+
+## 项目如何筛选直播源
+
+| 层级 | 检查内容 | 能解决的问题 |
 |---|---|---|
-| `:8081/allinone.m3u` | 最终聚合播放列表 | 仅可信网络 |
-| `:8081/healthz` | 基础探活 | 可以 |
-| `:8080` | `iptv-api` 管理和结果页面 | 不建议 |
-| `:19090` | 斗鱼流代理 | 播放器需要 |
-| `:19091` | 虎牙流代理 | 播放器需要 |
-| `:35455` | 单平台 M3U/解析兼容入口 | 按需 |
-| `:35456` | Python 旧兼容解析入口 | 通常不需要 |
+| 直播目录 | 虎牙/斗鱼官方当前开播房间 | 排除已不在直播目录的房间 |
+| 地址解析 | 重新获取有时效性的真实 CDN 地址 | 避免保存已经过期的签名 |
+| 实际拉流 | HTTP 状态、FLV 文件头、拉取字节量 | 排除网页、空响应、占位响应 |
+| IPTV 检测 | 可播性、速度、清晰度、HLS 状态 | 排除大量失效和低质量源 |
+| 发布过滤 | 正时长 `EXTINF`、视频文件扩展名、URL 黑名单 | 排除明显 VOD/录播文件 |
+| last-good | 新列表数量过少时拒绝覆盖 | 避免一次网络故障清空好列表 |
 
-本项目没有内置登录认证。不要把管理页面和代理端口直接暴露到不可信公网；建议放在局域网、VPN 或带认证的反向代理后面。
+发现自动检测漏掉的循环录播后，编辑宿主机文件：
 
-## 怎样区分直播和录播
-
-项目采用多层判断，但不会假装可以 100% 理解视频内容：
-
-| 检查 | 能排除什么 |
-|---|---|
-| 官方直播目录 | 已下播或不在当前直播列表的房间 |
-| 真实地址解析 | 空地址、失效签名和测试回退地址 |
-| FLV 魔数与实际拉流 | HTML 错误页、占位响应、只有少量数据的假活源 |
-| `iptv-api` 测速/分辨率/HLS 检查 | 无法播放、太慢、低清、短广告/无信号清单 |
-| 发布前 VOD 过滤 | 正时长 `EXTINF`、MP4/MKV 等文件型录播 |
-| 自定义 URL 黑名单 | 已知录播域名或路径 |
-
-长时间循环且持续生成新 HLS 分片的录播，在协议层和真直播完全相同，无法只靠网络探测绝对识别。发现这种源后，把其域名或稳定路径写入：
-
-```text
-data/lnmp/applecms/iptv-blocklist.txt
+```bash
+nano data/lnmp/applecms/iptv-blocklist.txt
 ```
 
-每行一个关键字，例如：
+每行写一个稳定的域名或路径关键字，例如：
 
 ```text
-example-recorded-domain.invalid
+# 注释行
+recorded.example.invalid
 /archive/
 ```
 
-下一次桥接结果时会自动过滤，不需要修改镜像。
+立即重新过滤：
 
-## 数据在哪里
+```bash
+docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
+```
 
-默认宿主机目录为仓库根目录的 `data/`：
+## 数据、升级和删除
+
+所有需要保留的内容都在宿主机 `./data`：
 
 ```text
 data/
-├── iptv-api/config/                 # iptv-api 可编辑配置
-├── iptv-api/output/result.m3u       # iptv-api 原始结果
+├── iptv-api/config/                 # 订阅、测速、EPG 等配置
+├── iptv-api/output/result.m3u       # IPTV 原始结果
 └── lnmp/
-    ├── allinone/channels.json       # 虎牙/斗鱼当前直播房间
-    ├── applecms/.iptv-result.m3u    # 过滤后、最终参与聚合的电视源
-    ├── applecms/iptv-blocklist.txt  # 自定义录播/坏源黑名单
-    └── logs/                        # 各组件日志
+    ├── allinone/channels.json       # 当前直播房间目录
+    ├── applecms/.iptv-result.m3u    # 过滤后的 IPTV 快照
+    ├── applecms/iptv-blocklist.txt  # 自定义过滤词
+    └── logs/                        # 日志
 ```
 
-升级或重建容器不会删除这个目录。
-
-## 文档导航
-
-- [系统架构与源检测流程](docs/architecture.md)
-- [Docker、群晖部署、升级和多架构构建](docs/docker.md)
-- [完整环境变量和配置文件说明](docs/configuration.md)
-- [Termux 安装和后台运行](docs/termux.md)
-- [按现象排查故障](docs/troubleshooting.md)
-- [免责声明](DISCLAIMER.md)
-
-## 开发验证
+升级不会删除数据：
 
 ```bash
+docker compose pull
+docker compose up -d --remove-orphans
+```
+
+只删除容器但保留配置：
+
+```bash
+docker compose down
+```
+
+不要随便删除 `data/`。备份、固定版本和回滚方法见 [部署白皮书](docs/docker.md#升级备份与回滚)。
+
+## 文档目录
+
+- [Docker、Debian、群晖、OpenWrt 部署白皮书](docs/docker.md)
+- [系统架构和一次播放请求的完整流程](docs/architecture.md)
+- [环境变量、端口、IPTV 配置参考](docs/configuration.md)
+- [Android Termux 安装、后台和自启动](docs/termux.md)
+- [按现象排查：启动、端口、空列表、播放失败、Actions](docs/troubleshooting.md)
+- [Docker Hub 镜像说明](dockerhub-description.md)
+- [免责声明](DISCLAIMER.md)
+
+## 开发和构建状态
+
+```bash
+go vet ./...
 go test ./...
 python3 -m py_compile docker/*.py
 python3 -m unittest discover -s tests -v
-sh -n docker/entry.sh docker/healthcheck.sh docker/scripts/bridge_iptv.sh
-bash -n switch.sh docker/scripts/sync_iptv_from_nas.sh
-docker buildx build --platform linux/amd64,linux/arm64 --output type=cacheonly .
+shellcheck -x docker/*.sh docker/scripts/*.sh switch.sh
+docker compose -f docker/docker-compose.yml config --quiet
 ```
 
-构建状态：[GitHub Actions](https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml)。镜像地址：[Docker Hub](https://hub.docker.com/r/minshurui/livetv-allinone)。
+每次推送 `main` 会先运行测试，再分别验证 amd64/arm64，最后发布 Docker Hub 和可选的阿里云 ACR。构建状态见 [GitHub Actions](https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml)。
 
-请勿提交 `.env`、真实 IP、个人目录、频道数据、SSH 信息、访问令牌或其他密钥。曾经公开发送或提交过的令牌应立即撤销并重新生成。
+项目没有内置登录系统。不要把 IPTV 管理页和流代理直接暴露到不可信公网；建议使用局域网、VPN，或在带认证的反向代理后使用。不要提交 `.env`、真实 IP、私人路径、SSH 信息和访问令牌。

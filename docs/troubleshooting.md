@@ -1,187 +1,345 @@
-# 故障排查
+# 故障排查手册
 
-先执行这组命令，它能区分“容器没启动”“核心进程退出”和“列表有了但上游源失败”：
+排障时先判断问题发生在哪一层：容器、M3U 入口、频道目录、直播代理、IPTV 更新，还是 GitHub Actions。不要一看到频道为空就反复重建容器。
+
+## 一分钟总检查
+
+在 `compose.yml` 所在目录执行：
 
 ```bash
-docker compose -f docker/docker-compose.yml ps
+docker compose ps
 docker inspect --format '{{json .State.Health}}' livetv
 docker logs --tail=200 livetv
 curl -v --max-time 10 http://127.0.0.1:8081/healthz
 curl -v --max-time 10 http://127.0.0.1:8081/allinone.m3u
 ```
 
-## 症状速查
+判断方法：
 
-| 症状 | 最可能原因 | 先做什么 |
+| 结果 | 说明 | 下一步 |
 |---|---|---|
-| Compose 启动时报端口占用 | 8080/8081/19090/19091 已被使用 | 修改 `docker/.env` 的 `HOST_*_PORT` |
-| 容器一直 `starting` | 首次启动未完成或某个核心进程反复退出 | 查看 `docker inspect` 和下方日志 |
-| `/healthz` 正常但 Docker 为 unhealthy | Go、虎牙代理或 `iptv-api` 进程失败 | `docker logs` 后检查组件日志 |
-| M3U 只有 `#EXTM3U` | `channels.json` 尚未生成，电视源也未桥接 | 看 `sync-channels.log` 和 `iptv-api-update.log` |
-| M3U 有频道但播放超时 | 播放器无法访问 19090/19091 或上游被网络拦截 | 测试流端口和具体频道 URL |
-| M3U 中 IP 正确但端口错误 | 宿主端口改过，`PUBLIC_*_PORT` 未同步 | 使用仓库 Compose 或手动设置公开端口 |
-| IPTV 更新失败但旧频道还能播 | last-good 保护生效 | 查 `bridge.log` 的失败原因 |
-| 出现录播/循环频道 | 协议上仍像直播，未命中结构过滤 | 将域名/路径加入 `iptv-blocklist.txt` |
-| buildx 卡很久 | QEMU、基础镜像拉取或旧 Dockerfile 源码编译 | 使用最新 main，并查看具体架构 job |
+| 容器不存在 | Compose 没启动或目录不对 | `docker compose up -d` |
+| 容器反复重启 | 主进程初始化失败 | 看 `docker logs livetv` |
+| `healthz` 连接拒绝 | 8081 没监听或映射错误 | 检查端口和健康状态 |
+| `healthz=ok`，M3U 只有头 | 服务正常，频道数据尚未生成 | 检查同步/桥接日志 |
+| M3U 有频道，本机可播，电视不可播 | 网络、防火墙或公开端口错误 | 检查 8081/19090/19091 |
+| 只有某个平台失败 | 该平台解析或上游网络问题 | 看平台对应日志 |
 
-## 日志位置
+## 症状索引
+
+| 症状 | 直接跳转 |
+|---|---|
+| 端口被占用 | [容器启动失败](#容器启动失败或端口被占用) |
+| 容器一直 `starting` / `unhealthy` | [健康检查](#容器一直-starting-或-unhealthy) |
+| M3U 下载不到 | [入口错误](#m3u-入口访问失败) |
+| M3U 只有 `#EXTM3U` | [空列表](#m3u-只有-extm3u) |
+| IPTV 一直不出现 | [IPTV 更新](#iptv-电视源一直没有加入) |
+| 列表有了但频道打不开 | [播放失败](#列表能下载但频道播放失败) |
+| IP/端口写错 | [地址生成](#m3u-里的-ip域名或端口错误) |
+| 出现录播/循环源 | [过滤漏网](#仍然出现录播或循环频道) |
+| Actions 红叉 | [构建发布](#github-actions-构建或发布失败) |
+
+## 日志地图
+
+| 日志 | 对应问题 |
+|---|---|
+| `docker logs livetv` | 容器初始化、进程退出、重启 |
+| `/data/lnmp/logs/livetv.log` | Go 解析、斗鱼健康检查、流代理 |
+| `/data/lnmp/logs/huya-proxy.log` | 虎牙拉流和断流 |
+| `/data/lnmp/logs/sync-channels.log` | 虎牙/斗鱼直播目录同步 |
+| `/data/lnmp/logs/iptv-api.log` | `iptv-api` Web/内部服务 |
+| `/data/lnmp/logs/iptv-api-update.log` | IPTV 候选下载、测速和输出 |
+| `/data/lnmp/logs/bridge.log` | IPTV 发布过滤、数量保护 |
+
+一次查看：
 
 ```bash
-docker exec livetv ls -lh /data/lnmp/logs
-docker exec livetv tail -n 200 /data/lnmp/logs/livetv.log
-docker exec livetv tail -n 200 /data/lnmp/logs/huya-proxy.log
-docker exec livetv tail -n 200 /data/lnmp/logs/sync-channels.log
-docker exec livetv tail -n 200 /data/lnmp/logs/iptv-api.log
-docker exec livetv tail -n 200 /data/lnmp/logs/iptv-api-update.log
-docker exec livetv tail -n 200 /data/lnmp/logs/bridge.log
+docker exec livetv sh -c '
+for f in /data/lnmp/logs/*.log; do
+  echo "===== $f ====="
+  tail -n 40 "$f"
+done
+'
 ```
 
-## 容器无法启动
+该命令不会显示 `.env` 或 GitHub Secrets，但平台返回内容仍可能包含订阅 URL；对外发送前请检查。
 
-检查配置展开后的最终 Compose：
+## 容器启动失败或端口被占用
+
+### 先展开最终 Compose
 
 ```bash
-docker compose -f docker/docker-compose.yml config
+docker compose config
+docker compose ps
 ```
 
-检查端口：
+### 检查被占用端口
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
-ss -lntp | grep -E ':8080|:8081|:19090|:19091|:35455|:35456'
+ss -lntp | grep -E ':8080|:8081|:19090|:19091|:35455|:35456' || true
 ```
 
-修改 `docker/.env`，例如：
+若看到 `address already in use`，修改宿主机左侧端口。仓库 `.env` 示例：
 
 ```dotenv
 HOST_LIVETV_PORT=8201
 HOST_IPTV_UI_PORT=8200
+HOST_PROXY_PORT=29090
+HOST_PY_PORT=29091
 ```
 
-然后重建容器：
+应用：
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d --force-recreate
 ```
 
-## 容器 unhealthy
+此时播放地址是 `http://服务器:8201/allinone.m3u`。仓库 Compose 会同步流代理公开端口；自定义 Compose 还要设置 `PUBLIC_PROXY_PORT` 和 `PUBLIC_PY_PORT`。
 
-查看健康检查最近输出：
+## 容器一直 `starting` 或 `unhealthy`
+
+健康状态不是只检查 nginx，还会确认核心进程、M3U 和 IPTV 页面。
 
 ```bash
 docker inspect --format '{{range .State.Health.Log}}{{.End}} exit={{.ExitCode}} {{.Output}}{{println}}{{end}}' livetv
-```
-
-手动执行同一个检查：
-
-```bash
 docker exec livetv /opt/livetv/healthcheck.sh
 docker exec livetv sh -c 'for f in /run/livetv-*.pid; do echo "$f $(cat "$f")"; done'
 ```
 
-入口脚本会每 20 秒重启退出的子进程。如果同一进程不断重启，真正原因通常在该进程对应日志中，而不是健康检查本身。
+常见原因：
 
-## 频道列表为空
+- 首次启动还在初始化；
+- 端口冲突导致子进程无法监听；
+- 上游基础配置不完整；
+- 数据目录不可写；
+- 内存不足，进程被 OOM Kill。
 
-确认房间目录文件：
+检查资源和挂载：
 
 ```bash
-docker exec livetv sh -c 'ls -lh /data/lnmp/allinone/channels.json; head -c 200 /data/lnmp/allinone/channels.json'
+docker inspect --format '{{.State.OOMKilled}}' livetv
+docker exec livetv sh -c 'id; ls -ld /data; touch /data/.write-test && unlink /data/.write-test'
+df -h
+free -h
 ```
 
-手动同步一次：
+## M3U 入口访问失败
+
+本机测试：
+
+```bash
+curl -v --max-time 10 http://127.0.0.1:8081/healthz
+curl -v --max-time 10 http://127.0.0.1:8081/allinone.m3u
+```
+
+如果本机失败：检查容器状态和 `HOST_LIVETV_PORT`。如果本机成功、其他设备失败：
+
+1. 使用服务器局域网 IP，不要使用 `127.0.0.1`；
+2. 确认客户端与服务器路由可达；
+3. 放行 TCP 8081；
+4. 群晖检查 DSM 防火墙；
+5. 云服务器检查安全组；
+6. OpenWrt 检查防火墙区域和端口转发。
+
+如果实际映射成 `8201:8081`，测试地址必须使用 `8201`。
+
+## M3U 只有 `#EXTM3U`
+
+这通常表示程序正常，但三个来源暂时都没有可发布数据。
+
+### 检查直播目录
+
+```bash
+docker exec livetv sh -c '
+ls -lh /data/lnmp/allinone/channels.json
+head -c 300 /data/lnmp/allinone/channels.json
+'
+docker exec livetv tail -n 100 /data/lnmp/logs/sync-channels.log
+```
+
+手动同步：
 
 ```bash
 docker exec livetv python3 /opt/livetv/sync_channels.py \
   --out /data/lnmp/allinone/channels.json
 ```
 
-如果平台只返回少量房间，脚本会保留旧文件并记录数量。首次启动没有旧文件时，可临时降低保护下限：
+首次启动没有旧文件、平台返回数量又低于保护值时，可暂时降低：
 
 ```dotenv
 SYNC_MIN_HUYA=5
 SYNC_MIN_DOUYU=5
 ```
 
-这只影响目录是否落盘，不会绕过后续真实地址和拉流检查。
+这只允许目录写入，不会把解析失败的房间伪装成直播。
 
-## 电视源一直没有加入聚合列表
-
-按顺序检查：
+### 检查 IPTV 快照
 
 ```bash
 docker exec livetv ls -lh /data/iptv-api/output/result.m3u
-docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
-docker exec livetv tail -n 50 /data/lnmp/logs/bridge.log
 docker exec livetv ls -lh /data/lnmp/applecms/.iptv-result.m3u
+docker exec livetv tail -n 100 /data/lnmp/logs/bridge.log
 ```
 
-常见桥接提示：
+## IPTV 电视源一直没有加入
 
-- `输入不存在`：`iptv-api` 尚未完成首次生成，继续看更新日志。
-- `仅剩 N 个频道，低于下限`：候选源失效较多，旧结果被正确保留；检查订阅或降低 `IPTV_MIN_CHANNELS`。
-- `blocklist=N`：命中自定义 URL 黑名单。
-- `positive_duration=N` / `vod_file=N`：检测到明显录播/VOD 条目。
+按顺序执行：
 
-## 地址或端口不正确
-
-正常情况下，访问：
-
-```text
-http://192.0.2.10:8081/allinone.m3u
+```bash
+docker exec livetv tail -n 150 /data/lnmp/logs/iptv-api-update.log
+docker exec livetv ls -lh /data/iptv-api/output/result.m3u
+docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
+docker exec livetv tail -n 80 /data/lnmp/logs/bridge.log
 ```
 
-列表会使用请求 Host `192.0.2.10`。若反向代理重写 Host，可设置：
+桥接日志含义：
 
-```dotenv
-PUBLIC_HOST=tv.example.com
-```
+| 提示 | 含义 | 处理 |
+|---|---|---|
+| `输入不存在` | `iptv-api` 尚未生成原始结果 | 检查订阅和更新日志 |
+| `低于下限` | 新结果太少，last-good 生效 | 检查失效源或调整 `IPTV_MIN_CHANNELS` |
+| `blocklist=N` | 命中用户黑名单 | 检查 `iptv-blocklist.txt` |
+| `positive_duration=N` | M3U 标记了正时长，按 VOD 排除 | 确认是否应设置 `IPTV_REJECT_VOD=0` |
+| `vod_file=N` | URL 像 MP4/MKV 等文件 | 正常过滤；误判时关闭 VOD 过滤 |
 
-这里不要填写协议或路径。IPv6 可填写裸地址，程序会自动生成 `[IPv6地址]`。
+若 `subscribe.txt` 中的来源被网络阻断，需要更换来源或为上游配置代理，不能靠反复重启解决。
 
-如果宿主机把 `19090` 映射成 `29090`，必须让列表写 `29090`：
+## 列表能下载但频道播放失败
 
-```dotenv
-HOST_PROXY_PORT=29090
-```
-
-仓库 Compose 会自动设置 `PUBLIC_PROXY_PORT=29090`。自定义 Compose 需要自己同时设置两者。
-
-## 单个频道播放失败
-
-从 M3U 复制该频道下一行 URL，然后测试：
+从 M3U 中复制某个频道 URL：
 
 ```bash
 curl -v --max-time 15 -o /dev/null '频道URL'
 ```
 
-含义：
+返回含义：
 
-- `404 offline (room not live)`：房间已下播或解析不到有效直播；这是正常离线状态，不再跳转测试录像。
-- `502 stream not FLV`：上游返回网页、错误体或其他非 FLV 内容。
-- 连接服务器端口超时：Docker 端口、防火墙或路由问题。
-- 已连接但很快中断：查看 `livetv.log` / `huya-proxy.log`，可能是 CDN 限流或签名变化。
+| 结果 | 含义 |
+|---|---|
+| `404 offline (room not live)` | 房间已下播或当前无法解析；不会再跳测试录像 |
+| `502 stream not FLV` | 上游返回网页、错误体或非 FLV 内容 |
+| 连接 19090/19091 超时 | 播放器到代理端口不通 |
+| 建立连接后很快断开 | CDN 限流、签名变化或上游网络问题 |
 
-## GitHub Actions / buildx 失败
+平台对应日志：
 
-构建页面：<https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml>。
+```bash
+# 斗鱼/Go
+docker exec livetv tail -n 150 /data/lnmp/logs/livetv.log
 
-工作流顺序是：
+# 虎牙/Python
+docker exec livetv tail -n 150 /data/lnmp/logs/huya-proxy.log
+```
 
-1. Go、Python、Shell 测试。
-2. amd64 和 arm64 分开验证镜像。
-3. 两个架构都通过后，主线才推送 Docker Hub/阿里云。
+IPTV 直链不经过 19090/19091。只有 IPTV 失败时，应直接测试该上游 URL 和服务器网络。
 
-`secrets` 不能直接用于某些 job/step 条件表达式。当前工作流先把 Secrets 映射到 job 的 `env`，条件只读取 `env.*`。如果又看到“无法识别的命名值 secrets”，说明运行的不是最新工作流提交。
+## M3U 里的 IP、域名或端口错误
 
-若提示 Docker Hub 未授权，检查仓库 Actions Secrets：
+访问：
 
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`（Docker Hub Access Token，不是 GitHub Token）
+```text
+http://192.168.1.50:8081/allinone.m3u
+```
 
-本仓库的发布任务声明了 GitHub Environment `minshurui`，因此以上凭证既可放在
-`Settings → Environments → minshurui → Environment secrets`，也可放在仓库级
-`Settings → Secrets and variables → Actions`。如果两处存在同名 Secret，Environment
-中的值优先。
+默认生成 `192.168.1.50`。若反向代理改写了 Host，可设置：
 
-公开发送过的 GitHub 或 Docker Hub 令牌必须撤销，不能继续使用。
+```dotenv
+PUBLIC_HOST=tv.example.com
+```
+
+不要带协议、端口和路径。
+
+如果宿主机映射 `29090:19090`，M3U 必须写 `29090`：
+
+```dotenv
+HOST_PROXY_PORT=29090
+```
+
+仓库 Compose 会自动同步。自定义 Compose：
+
+```yaml
+environment:
+  PUBLIC_PROXY_PORT: "29090"
+```
+
+IPv6 地址应按 `http://[IPv6]:8081/allinone.m3u` 访问，程序会自动保留方括号。
+
+## 仍然出现录播或循环频道
+
+自动过滤能识别文件型 VOD、正时长 M3U 和部分 HLS 结束标志。持续产生新分片的循环视频与真直播协议形态相同，无法保证自动识别。
+
+确认是录播后，把稳定域名或路径写入：
+
+```bash
+nano data/lnmp/applecms/iptv-blocklist.txt
+docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
+docker exec livetv tail -n 50 /data/lnmp/logs/bridge.log
+```
+
+不要用过短的关键字，例如 `live`、`cdn`，否则会误伤大量正常频道。
+
+## GitHub Actions 构建或发布失败
+
+构建页：<https://github.com/minshurui/livetv-server/actions/workflows/build-image.yml>。
+
+顺序：
+
+1. Go/Python/Shell/Compose 测试；
+2. amd64、arm64 分开验证；
+3. 两个架构通过后发布 Docker Hub；
+4. 配置完整时同时发布阿里云 ACR；
+5. 更新 Docker Hub 说明。
+
+### `secrets` 无法识别
+
+workflow 的 `if:` 不直接读取 `secrets.*`，而是先映射到 job `env`。看到旧错误说明运行的是旧提交，请确认 `main` 已更新。
+
+### 提示缺少 Docker Hub 参数
+
+本项目发布 job 声明：
+
+```yaml
+environment: minshurui
+```
+
+因此凭证应放在：
+
+```text
+Settings → Environments → minshurui → Environment secrets
+```
+
+也兼容仓库级：
+
+```text
+Settings → Secrets and variables → Actions
+```
+
+名称必须完全一致：
+
+```text
+DOCKERHUB_USERNAME
+DOCKERHUB_TOKEN
+```
+
+`DOCKERHUB_TOKEN` 是 Docker Hub Access Token，不是 GitHub PAT。
+
+### 阿里云配置不完整
+
+以下五项必须全部配置或全部留空：
+
+```text
+ALIYUN_REGISTRY
+ALIYUN_NAMESPACE
+ALIYUN_REPO
+ALIYUN_USERNAME
+ALIYUN_PASSWORD
+```
+
+### buildx / apk 下载失败
+
+先确认失败的是 amd64 还是 arm64 job。最新 Dockerfile 使用固定 digest 的多架构 `iptv-api` 基础镜像，并对 APK 安装重试；不要继续运行旧源码构建提交。
+
+网络瞬时失败可以在 Actions 页面选择 **Re-run failed jobs**。如果反复在相同包或基础镜像失败，再检查 Docker Hub/Alpine 网络与固定 digest 是否仍可用。
+
+公开发送过的 GitHub、Docker Hub 或阿里云令牌都应撤销并重新生成。
