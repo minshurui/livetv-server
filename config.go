@@ -2,17 +2,17 @@ package main
 
 // livetv — 直播全链路单二进制 (替代 allinone.py + stream-proxy.py + live-m3u.php + douyu-health.sh)
 // 端口:  35455 = 解析器/线路m3u/聚合m3u ; 19090 = FLV直通 + HLS
-// 环境变量: PUBLIC_HOST(默认192.168.2.2) AIO_PORT(35455) PROXY_PORT(19090) DATA(数据根目录, 容器用)
+// 环境变量: PUBLIC_HOST(可选的外部主机名) AIO_PORT(35455) PROXY_PORT(19090) DATA(数据根目录, 容器用)
 
 import (
 	"os"
 	"path/filepath"
 )
 
-// 数据根目录: 手机默认 /data/data/com.termux/files/home, Docker 容器用 DATA=/data 覆盖。
+// 数据根目录: 优先 DATA；未设置时使用当前用户目录，Docker 容器用 DATA=/data 覆盖。
 // 全部读写路径派生自 dataRoot, 保证同一份二进制手机/容器通用。
 var (
-	dataRoot  = envOr("DATA", "/data/data/com.termux/files/home")
+	dataRoot  = dataRootOrHome()
 	LNMP      = dataRoot + "/lnmp"
 	ChannelsF = LNMP + "/allinone/channels.json"
 	AppleCMS  = LNMP + "/applecms"
@@ -24,12 +24,11 @@ var (
 )
 
 var (
-	PUBLIC_HOST = envOr("PUBLIC_HOST", "192.168.2.2")
+	// 默认仅供直接访问使用。正常情况下会从请求 Host 动态推导，避免把部署者的 IP 写进播放列表。
+	PUBLIC_HOST = envOr("PUBLIC_HOST", "127.0.0.1")
 	AIO_PORT    = envOr("AIO_PORT", "35455")
 	PROXY_PORT  = envOr("PROXY_PORT", "19090")
 	PY_PORT     = envOr("PY_PORT", "19091") // 虎牙: Python stream-proxy (FLV 直通)
-	PUBLIC_AIO  = "http://" + PUBLIC_HOST + ":" + AIO_PORT
-	PUBLIC_PRX  = "http://" + PUBLIC_HOST + ":" + PROXY_PORT
 )
 
 const (
@@ -48,6 +47,16 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func dataRootOrHome() string {
+	if v := os.Getenv("DATA"); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "."
 }
 
 func logf(format string, a ...interface{}) {

@@ -1,14 +1,11 @@
 # livetv-allinone 一键部署
-# 构建: (前提 WSL Ubuntu 已 clone src/iptv-api)
-#   git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
-#   docker compose -f docker/docker-compose.yml up -d --build
-version: "3.8"
+# 默认运行已发布镜像；本地构建请使用 --build，且先准备 src/iptv-api（见 docs/docker.md）。
 services:
   livetv:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: minshurui/livetv-allinone:latest
+    image: ${LIVETV_IMAGE:-minshurui/livetv-allinone:latest}
     container_name: livetv
     restart: unless-stopped
     ports:
@@ -19,14 +16,14 @@ services:
       - "8081:8081"     # nginx 反代 allinone.m3u
       - "8080:8080"     # iptv-api Web UI
     environment:
-      - PUBLIC_HOST=
-      - AIO_PORT=35455
-      - PROXY_PORT=19090
-      - PY_PORT=19091
-      - RES_PORT=35456
-      - TZ=Asia/Shanghai
-      - APP_PORT=5180
-      - NGINX_HTTP_PORT=8080
-      - NGINX_RTMP_PORT=1935
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
+      AIO_PORT: ${AIO_PORT:-35455}
+      PROXY_PORT: ${PROXY_PORT:-19090}
+      PY_PORT: ${PY_PORT:-19091}
+      RES_PORT: ${RES_PORT:-35456}
+      TZ: ${TZ:-Asia/Shanghai}
+      APP_PORT: ${APP_PORT:-5180}
+      NGINX_HTTP_PORT: ${NGINX_HTTP_PORT:-8080}
+      NGINX_RTMP_PORT: ${NGINX_RTMP_PORT:-1935}
     volumes:
-      - ../data:/data   # 数据持久化 (从仓库根 data/)
+      - ${LIVETV_DATA_DIR:-../data}:/data

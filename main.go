@@ -31,16 +31,20 @@ type aioHandler struct {
 // 换 WiFi 后手机 IP 会变, 若 m3u 还用启动时的 PUBLIC_HOST 快照就会失效;
 // 改为跟随访问者的 Host —— 用户用哪个地址访问8081, m3u里就用哪个地址,
 // 换网络后无需改任何配置。例如:
-//   http://192.168.1.95:8081/allinone.m3u → 流地址 http://192.168.1.95:19090/...
 //   http://127.0.0.1:8081/allinone.m3u     → 流地址 http://127.0.0.1:19090/...
-//   http://100.87.250.92:8081/allinone.m3u → 流地址 http://100.87.250.92:19090/...
 func reqHost(r *http.Request) string {
-	h := r.Host
-	if i := strings.IndexByte(h, ':'); i >= 0 {
-		h = h[:i]
+	h := strings.TrimSpace(r.Host)
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	} else {
+		h = strings.Trim(h, "[]")
 	}
-	if h == "" {
+	if h == "" || strings.ContainsAny(h, "/\\@ ") {
 		return PUBLIC_HOST
+	}
+	// URL 中的 IPv6 字面量必须带方括号；旧实现按第一个冒号切分会把 IPv6 截断。
+	if ip := net.ParseIP(h); ip != nil && ip.To4() == nil {
+		return "[" + h + "]"
 	}
 	return h
 }

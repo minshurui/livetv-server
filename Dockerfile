@@ -12,8 +12,8 @@ FROM python:3.14-alpine AS iptv-builder
 ARG APP_WORKDIR=/iptv-api
 ARG NGINX_VER=1.27.4
 ARG RTMP_VER=1.2.2
-# 构建网络代理(nginx.org/github 下载用; WSL 走 NAS mihomo, 其他环境可覆盖)
-ARG BUILD_PROXY=http://100.105.60.99:7890
+# 可选构建代理；默认关闭，避免镜像构建依赖个人网络。
+ARG BUILD_PROXY=
 WORKDIR $APP_WORKDIR
 COPY src/iptv-api/Pipfile* ./
 RUN if [ -n "$BUILD_PROXY" ]; then \
@@ -97,5 +97,8 @@ RUN rm -rf $APP_WORKDIR/docs $APP_WORKDIR/tests \
 VOLUME ["/data"]
 
 EXPOSE 35455 19090 35456 19091 8081 8080 1935 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8081/healthz || exit 1
 
 ENTRYPOINT ["/opt/livetv/entry.sh"]

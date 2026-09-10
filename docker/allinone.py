@@ -274,8 +274,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # 斗鱼存活白名单过滤
         alive = None
         if platform == "douyu":
-            alive_path = "/data/data/com.termux/files/home/lnmp/applecms/douyu-alive.txt"
-            stamp_path = "/data/data/com.termux/files/home/lnmp/applecms/.douyu-health.stamp"
+            data_root = os.environ.get("DATA", os.path.expanduser("~"))
+            alive_path = os.path.join(data_root, "lnmp", "applecms", "douyu-alive.txt")
+            stamp_path = os.path.join(data_root, "lnmp", "applecms", ".douyu-health.stamp")
             try:
                 if os.path.exists(stamp_path) and os.path.exists(alive_path):
                     age = time.time() - float(open(stamp_path).read().strip())

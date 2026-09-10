@@ -5,10 +5,57 @@ on:
   push:
     branches: [main]
     paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
+  pull_request:
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
   workflow_dispatch:                 # GitHub 页面手动触发
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Go unit tests
+        run: go test ./...
+      - name: Python syntax checks
+        run: python -m py_compile docker/*.py
+      - name: Shell syntax checks
+        run: |
+          sh -n docker/entry.sh
+          bash -n docker/scripts/*.sh
+
+  verify-image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone iptv-api build dependency
+        run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify amd64 and arm64 image build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=cacheonly
+          build-args: |
+            BUILD_PROXY=
+
   build:
+    needs: verify-image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,7 +77,7 @@ jobs:
         uses: actions/checkout@v4
 
       # 前置: clone iptv-api(构建必需, 已 .gitignore)
-      - name: Clone guovern/iptv-api
+      - name: Clone iptv-api build dependency
         run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
 
       - name: Set up Docker Buildx

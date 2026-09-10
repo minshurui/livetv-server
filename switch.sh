@@ -1,7 +1,7 @@
 #!/bin/bash
 # 切换: Python 三件套(allinone/stream-proxy) → Go 单文件 livetv
 # 用法: bash switch.sh [start|stop|status|restart]
-HOME_DIR="/data/data/com.termux/files/home"
+HOME_DIR="${DATA:-$HOME}"
 LNMP="$HOME_DIR/lnmp"
 LOG="$LNMP/logs"
 cd "$LNMP/livetv" || exit 1

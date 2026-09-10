@@ -15,21 +15,21 @@
 #             >> ~/lnmp/logs/iptv-sync.log 2>&1
 #
 # 环境变量(均可覆盖):
-#   NAS_HOST    NAS Tailscale IP  (默认 100.105.60.99)
-#   NAS_USER    SSH 用户          (默认 minshurui)
+#   NAS_HOST    NAS 主机名或 IP（必填）
+#   NAS_USER    SSH 用户          （必填）
 #   NAS_M3U     NAS 自愈源路径    (默认 /vol2/apps/iptv-api/output/result.m3u)
 #   DST_FILE    本地输出路径      (默认 applecms/.iptv-result.m3u)
 #   MIN_LINES   内容保护: 少于此时频道数视为失败不覆盖 (默认 20)
 # ============================================================
 set -euo pipefail
 
-NAS_HOST="${NAS_HOST:-100.105.60.99}"
-NAS_USER="${NAS_USER:-minshurui}"
+NAS_HOST="${NAS_HOST:?请设置 NAS_HOST，例如 nas.example.internal}"
+NAS_USER="${NAS_USER:?请设置 NAS_USER}"
 NAS_M3U="${NAS_M3U:-/vol2/apps/iptv-api/output/result.m3u}"
-HOME_DIR="/data/data/com.termux/files/home"
+HOME_DIR="${DATA:-$HOME}"
 DST_FILE="${DST_FILE:-${HOME_DIR}/lnmp/applecms/.iptv-result.m3u}"
 MIN_LINES="${MIN_LINES:-20}"
-SSH_OPT="-o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes"
+SSH_OPT="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o BatchMode=yes"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 

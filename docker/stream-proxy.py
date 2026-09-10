@@ -11,11 +11,11 @@ import os, sys, subprocess, threading, time, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PROXY_PORT", "9090"))
-ALLINONE_BASE = os.environ.get("ALLINONE_BASE", "http://YOUR_LOCAL_IP:YOUR_PORT")  # 例如 http://127.0.0.1:35455
+ALLINONE_BASE = os.environ.get("ALLINONE_BASE", "http://127.0.0.1:35455")
 UPSTREAM_PROXY = os.environ.get("UPSTREAM_PROXY", "")
 IPV6_PLATFORMS = tuple(x.strip() for x in os.environ.get("IPV6_PLATFORMS", "").split(",") if x.strip())
 CHUNK = 4 * 1024
-HLS_ROOT = os.environ.get("HLS_ROOT", "/data/data/com.termux/files/home/lnmp/allinone/hls")
+HLS_ROOT = os.environ.get("HLS_ROOT", os.path.join(os.environ.get("DATA", os.path.expanduser("~")), "lnmp", "allinone", "hls"))
 HLS_IDLE = float(os.environ.get("HLS_IDLE", "300"))
 HLS_STALE = float(os.environ.get("HLS_STALE", "25"))
 HLS_WARMUP = float(os.environ.get("HLS_WARMUP", "45"))
