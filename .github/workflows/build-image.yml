@@ -10,6 +10,10 @@ on:
     paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
   workflow_dispatch:                 # GitHub 页面手动触发
 
+concurrency:
+  group: build-image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
