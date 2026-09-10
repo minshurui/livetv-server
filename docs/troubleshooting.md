@@ -324,6 +324,14 @@ DOCKERHUB_TOKEN
 
 `DOCKERHUB_TOKEN` 是 Docker Hub Access Token，不是 GitHub PAT。
 
+如果登录步骤成功，但推送时报：
+
+```text
+401 Unauthorized: access token has insufficient scopes
+```
+
+说明 Token 有效但只有读取权限。到 Docker Hub 重新创建或编辑具备 **Read & Write** 权限的 Access Token，再替换 Environment 中的 `DOCKERHUB_TOKEN`。只读 Token 可以登录和拉取，不能推送镜像，也不能完成说明同步。
+
 ### 阿里云配置不完整
 
 以下五项必须全部配置或全部留空：

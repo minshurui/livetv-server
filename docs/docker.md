@@ -140,6 +140,82 @@ http://服务器局域网IP:8081/allinone.m3u
 
 服务器本机能访问、电视不能访问，通常是防火墙、端口映射或网络隔离，而不是容器内部故障。
 
+## 部署验收清单
+
+不要只看容器“正在运行”。按下面顺序验收，全部通过才算真正可用。
+
+### 1. 核心进程和入口
+
+```bash
+docker compose ps
+docker inspect --format '{{.State.Health.Status}}' livetv
+curl -fsS http://127.0.0.1:8081/healthz && echo
+```
+
+结果：容器为 `Up`，健康状态为 `healthy`，接口输出 `ok`。
+
+### 2. M3U 格式和频道数量
+
+```bash
+curl -fsS http://127.0.0.1:8081/allinone.m3u -o /tmp/allinone.m3u
+head -n 5 /tmp/allinone.m3u
+grep -c '^#EXTINF:' /tmp/allinone.m3u
+```
+
+结果：第一行是 `#EXTM3U`，频道数量大于 0。首次 IPTV 尚未完成时，频道数会继续增加。
+
+### 3. M3U 没有写入回环地址
+
+从另一台设备用服务器局域网 IP 下载 M3U，再检查频道 URL：
+
+```bash
+curl -fsS http://服务器局域网IP:8081/allinone.m3u | grep -m 3 '^http'
+```
+
+结果：URL 使用服务器可达地址，不应错误写成 `127.0.0.1`。
+
+### 4. 平台代理端口可达
+
+在播放器所在电脑测试：
+
+```bash
+curl -I --max-time 5 http://服务器局域网IP:19090/
+curl -I --max-time 5 http://服务器局域网IP:19091/
+```
+
+即使根路径返回 404，只要不是连接超时或拒绝，就说明端口已到达服务。真正播放仍需使用 M3U 中的完整频道路径。
+
+### 5. IPTV 原始结果和最终快照
+
+```bash
+docker exec livetv ls -lh /data/iptv-api/output/result.m3u
+docker exec livetv ls -lh /data/lnmp/applecms/.iptv-result.m3u
+docker exec livetv tail -n 30 /data/lnmp/logs/bridge.log
+```
+
+首次测速未结束时可以暂时没有文件。生成后，桥接日志应说明保留、过滤和发布了多少频道。
+
+### 6. 持久化和重启
+
+```bash
+docker compose restart livetv
+docker compose ps
+ls -la data/iptv-api/config
+ls -la data/lnmp
+```
+
+结果：重启后配置、频道目录和 last-good 快照仍在。
+
+### 7. 最终播放器验证
+
+播放器添加：
+
+```text
+http://服务器局域网IP:8081/allinone.m3u
+```
+
+分别抽查一个虎牙、斗鱼和 IPTV 频道。某个房间离线返回 404 属于正常状态；大量频道同一时间失败才需要继续排查网络或端口。
+
 ## 方案 B：群晖 Container Manager
 
 适用于 DSM 7。建议使用“项目”而不是手动创建单个容器，这样升级和迁移更容易。

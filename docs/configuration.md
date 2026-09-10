@@ -308,4 +308,4 @@ ALIYUN_USERNAME
 ALIYUN_PASSWORD
 ```
 
-Docker Hub 两项必需；阿里云五项必须全部配置或全部留空。Environment 中的同名 Secret 优先。不要使用 GitHub PAT 代替 Docker Hub 或阿里云令牌。
+Docker Hub 两项必需；`DOCKERHUB_TOKEN` 必须是具备 **Read & Write** 权限的 Docker Hub Access Token。阿里云五项必须全部配置或全部留空。Environment 中的同名 Secret 优先。不要使用 GitHub PAT 代替 Docker Hub 或阿里云令牌。

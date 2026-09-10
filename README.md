@@ -182,6 +182,7 @@ docker compose down
 
 ## 文档目录
 
+- [文档中心：按设备、问题和阅读顺序导航](docs/README.md)
 - [Docker、Debian、群晖、OpenWrt 部署白皮书](docs/docker.md)
 - [系统架构和一次播放请求的完整流程](docs/architecture.md)
 - [环境变量、端口、IPTV 配置参考](docs/configuration.md)

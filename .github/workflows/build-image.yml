@@ -96,7 +96,7 @@ jobs:
     # 也可使用同名的 Repository Secrets；Environment 中的同名值优先。
     #   Docker Hub(必配, 缺失时发布 job 会明确失败):
     #     DOCKERHUB_USERNAME = minshurui
-    #     DOCKERHUB_TOKEN    = Docker Hub Access Token(https://hub.docker.com/settings/security)
+    #     DOCKERHUB_TOKEN    = Docker Hub Access Token（必须具备 Read & Write）
     #   阿里云容器镜像 ACR(选配; 配了才推阿里云):
     #     ALIYUN_REGISTRY   = registry.cn-hangzhou.aliyuncs.com
     #     ALIYUN_NAMESPACE  = <你的命名空间>
