@@ -287,9 +287,11 @@ docker exec livetv tail -n 50 /data/lnmp/logs/bridge.log
 
 1. Go/Python/Shell/Compose 测试；
 2. amd64、arm64 分开验证；
-3. 两个架构通过后发布 Docker Hub；
-4. 配置完整时同时发布阿里云 ACR；
-5. 更新 Docker Hub 说明。
+3. 两个架构通过后，Docker Hub 与阿里云 ACR 进入相互独立的发布 job；
+4. Docker Hub 镜像推送成功后更新仓库说明；
+5. 阿里云未配置时明确跳过，配置不完整时只让阿里云 job 失败。
+
+因此 Docker Hub 凭据错误不会再阻止阿里云发布，反过来也一样。
 
 ### `secrets` 无法识别
 
@@ -323,6 +325,14 @@ DOCKERHUB_TOKEN
 ```
 
 两项二选一：`DOCKERHUB_PASSWORD` 用于兼容原先成功的账号密码登录；`DOCKERHUB_TOKEN` 是 Docker Hub Access Token，不是 GitHub PAT。两项同时存在时优先使用密码。Docker Hub 用户名默认取 GitHub 仓库 owner；两者不同时，在 Actions Variables 中设置 `DOCKERHUB_USERNAME`，不要把公开用户名放进 Secret。
+
+如果在 `Login to Docker Hub` 直接出现：
+
+```text
+unauthorized: incorrect username or password
+```
+
+这发生在推送之前，表示凭据本身未通过身份验证，不是镜像仓库写入权限不足。使用旧密码方案时，把可登录 Docker Hub 的账号密码保存为 `DOCKERHUB_PASSWORD`；workflow 会优先使用它。GitHub 无法读取已有 Secret 的明文，因此更新后需重新运行构建验证。
 
 如果登录步骤成功，但推送时报：
 
