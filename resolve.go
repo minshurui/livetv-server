@@ -3,6 +3,7 @@ package main
 // 解析器: 虎牙/斗鱼/抖音/YY → 真实签名流 URL (与 allinone.py 1:1)
 
 import (
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -42,7 +43,18 @@ func httpGetText(u, ua string, timeout int) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	// 虎牙/抖音页面强制 content-encoding: gzip。client 因 DisableCompression=true
+	// 不会自动解压，这里按响应头手动解压，否则正则拿不到明文会解析失败(503/404)。
+	var body io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gz, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		defer gz.Close()
+		body = gz
+	}
+	b, err := io.ReadAll(body)
 	if err != nil {
 		return "", err
 	}
