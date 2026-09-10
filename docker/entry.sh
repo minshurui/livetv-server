@@ -1,179 +1,225 @@
 #!/bin/sh
-# livetv-allinone 容器入口：单 Alpine 容器整合全部直播服务
-#   [自研] Go livetv(35455 m3u/301 + 19090 斗鱼FLV)
-#   [自研] Python 虎牙(allinone.py 35456 解析 + stream-proxy.py 19091 FLV直通)
-#   [自研] nginx(8081 反代 /allinone.m3u)
-#   [开源] guovern/iptv-api 电视源聚合(8080 UI + 自愈更新), 输出 result.m3u 供 m3u 引用
-set -u
+# livetv-allinone 容器入口：启动、持久化、定时更新和进程守护。
+set -eu
 
 APP_WORKDIR=/iptv-api
-DATA="/data"
-GOLOG="$DATA/lnmp/logs/livetv.log"
-PYLOG="$DATA/lnmp/logs/huya-proxy.log"
-IPTVLOG="$DATA/lnmp/logs/iptv-api.log"
-ASTARLOG="$DATA/lnmp/logs/iptv-api-update.log"
+DATA="${DATA:-/data}"
+LOG_DIR="$DATA/lnmp/logs"
+APPLECMS_DIR="$DATA/lnmp/applecms"
+HLS_DIR="$DATA/lnmp/allinone/hls"
+IPTV_DATA_DIR="$DATA/iptv-api"
 
-# 日志目录 + 数据目录(挂载卷)。Go 服务统一从 $DATA/lnmp 读写。
-mkdir -p "$DATA/lnmp/logs" "$DATA/lnmp/applecms" "$DATA/lnmp/allinone/hls"
-
-# ---------- 环境变量(默认值, 通过 -e 覆盖) ----------
 PUBLIC_HOST="${PUBLIC_HOST:-}"
 AIO_PORT="${AIO_PORT:-35455}"
 PROXY_PORT="${PROXY_PORT:-19090}"
-PY_PORT="${PY_PORT:-19091}"       # Python 虎牙 FLV
-RES_PORT="${RES_PORT:-35456}"     # Python 虎牙 301 解析
-export PUBLIC_HOST AIO_PORT PROXY_PORT PY_PORT RES_PORT DATA
+PY_PORT="${PY_PORT:-19091}"
+RES_PORT="${RES_PORT:-35456}"
+PUBLIC_AIO_PORT="${PUBLIC_AIO_PORT:-$AIO_PORT}"
+PUBLIC_PROXY_PORT="${PUBLIC_PROXY_PORT:-$PROXY_PORT}"
+PUBLIC_PY_PORT="${PUBLIC_PY_PORT:-$PY_PORT}"
+APP_PORT="${APP_PORT:-5180}"
+NGINX_HTTP_PORT="${SERVICE_PORT:-${NGINX_HTTP_PORT:-8080}}"
+NGINX_RTMP_PORT="${NGINX_RTMP_PORT:-1935}"
+LIVETV_HTTP_PORT="${LIVETV_HTTP_PORT:-8081}"
+IPTV_MIN_CHANNELS="${IPTV_MIN_CHANNELS:-20}"
+IPTV_REJECT_VOD="${IPTV_REJECT_VOD:-1}"
+IPTV_BLOCKLIST="${IPTV_BLOCKLIST:-}"
+IPTV_BLOCKLIST_FILE="${IPTV_BLOCKLIST_FILE:-$APPLECMS_DIR/iptv-blocklist.txt}"
 
-# ============================================================
-# 1. iptv-api 电视源聚合 ======================================
-# ============================================================
-echo "[entry] 启动 iptv-api 电视源聚合 (8080)"
-if [ -d "$APP_WORKDIR" ] && [ -f "$APP_WORKDIR/main.py" ]; then
-  cd "$APP_WORKDIR"
-  # 首次启动: 从内置模板 config 初始化(若容器内 config 无文件)
-  if [ -d /iptv-api-config ] && [ ! -f "$APP_WORKDIR/config/config.ini" ]; then
-    echo "[entry]   初始化 iptv-api config (从 /iptv-api-config)"
-    [ -d "$APP_WORKDIR/config" ] || mkdir -p "$APP_WORKDIR/config"
-    for f in /iptv-api-config/*; do
-      [ -e "$APP_WORKDIR/config/$(basename "$f")" ] || cp -r "$f" "$APP_WORKDIR/config/" 2>/dev/null
-    done
+export APP_WORKDIR DATA PUBLIC_HOST AIO_PORT PROXY_PORT PY_PORT RES_PORT APP_PORT
+export PUBLIC_AIO_PORT PUBLIC_PROXY_PORT PUBLIC_PY_PORT
+export NGINX_HTTP_PORT NGINX_RTMP_PORT LIVETV_HTTP_PORT IPTV_MIN_CHANNELS
+export IPTV_REJECT_VOD IPTV_BLOCKLIST IPTV_BLOCKLIST_FILE
+export IPTV_API_PLAIN_OUTPUT=1 IPTV_API_SKIP_VERSION_CHECK=1
+
+GO_LOG="$LOG_DIR/livetv.log"
+PY_LOG="$LOG_DIR/huya-proxy.log"
+IPTV_LOG="$LOG_DIR/iptv-api.log"
+IPTV_UPDATE_LOG="$LOG_DIR/iptv-api-update.log"
+
+validate_port() {
+  name=$1
+  value=$2
+  case "$value" in
+    ''|*[!0-9]*) echo "[entry] 无效端口 $name=$value" >&2; exit 2 ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    echo "[entry] 端口超出范围 $name=$value" >&2
+    exit 2
   fi
-  # 启用 venv
-  . "$APP_WORKDIR/.venv/bin/activate" 2>/dev/null || echo "[entry]   ⚠ iptv-api venv 缺失"
-  export IPTV_API_PLAIN_OUTPUT=1 IPTV_API_SKIP_VERSION_CHECK=1
-  # 渲染 iptv-api 的 nginx 模板(8080/r	tmp)
-  APP_PATH="$APP_WORKDIR"
-  if [ -n "${SERVICE_PORT:-}" ]; then NGINX_HTTP_PORT="$SERVICE_PORT"; fi
-  sed -e "s/\${APP_PORT}/$APP_PORT/g" \
-      -e "s/\${NGINX_HTTP_PORT}/$NGINX_HTTP_PORT/g" \
-      -e "s/\${NGINX_RTMP_PORT}/$NGINX_RTMP_PORT/g" \
-      -e "s|\${IPV6_HTTP_LISTEN}||g" \
-      /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
-  # 若 result.m3u 缺失/过期(>6h), 先跑一次 main.py 生成电视源(数据挂在 /data)
-  [ -d "$APP_WORKDIR/output" ] || mkdir -p "$APP_WORKDIR/output"
-  if [ ! -f "$DATA/lnmp/applecms/.iptv-result.m3u" ]; then
-    echo "[entry]   result.m3u 缺失, 后台首先生成电视源"
-    python -u "$APP_WORKDIR/main.py" >> "$ASTARLOG" 2>&1 &
-    echo $! > /run/iptv-main.pid
-  fi
-  # iptv-api 自带编译 nginx(8080, 带 rtmp + flask 反代)
-  if [ -x /usr/local/nginx/sbin/nginx ]; then
-    /usr/local/nginx/sbin/nginx -g 'daemon off;' >> "$IPTVLOG" 2>&1 &
-    echo $! > /run/iptv-nginx.pid
-    echo "[entry]   iptv-api nginx(8080) pid=$!"
-  fi
-  # 常驻 flask API(5180) 供 nginx 反代 + /stat rtmp 统计
-  (cd "$APP_WORKDIR" && exec python -u -m gunicorn service.app:app -b 127.0.0.1:$APP_PORT --workers=1 --timeout=1000) >> "$IPTVLOG" 2>&1 &
-  echo $! > /run/iptv-flask.pid
-  echo "[entry]   iptv-api flask(5180) pid=$!"
-  # 主循环自愈更新(iptv-api 常驻 main; 若与上面首启重复, 由本项目 crond 接管定时)
+}
+
+for pair in \
+  "AIO_PORT:$AIO_PORT" "PROXY_PORT:$PROXY_PORT" "PY_PORT:$PY_PORT" \
+  "RES_PORT:$RES_PORT" "APP_PORT:$APP_PORT" \
+  "PUBLIC_AIO_PORT:$PUBLIC_AIO_PORT" "PUBLIC_PROXY_PORT:$PUBLIC_PROXY_PORT" \
+  "PUBLIC_PY_PORT:$PUBLIC_PY_PORT" \
+  "NGINX_HTTP_PORT:$NGINX_HTTP_PORT" "NGINX_RTMP_PORT:$NGINX_RTMP_PORT" \
+  "LIVETV_HTTP_PORT:$LIVETV_HTTP_PORT"; do
+  validate_port "${pair%%:*}" "${pair#*:}"
+done
+
+mkdir -p "$LOG_DIR" "$APPLECMS_DIR" "$HLS_DIR" \
+  "$IPTV_DATA_DIR/config" "$IPTV_DATA_DIR/output"
+
+# iptv-api 的配置和结果都持久化到 /data。旧镜像只桥接最终 M3U，容器重启后
+# 上游 output/config 会丢失，且更新进程可能不再启动。
+if [ ! -f "$IPTV_DATA_DIR/config/config.ini" ]; then
+  echo "[entry] 初始化持久化 iptv-api 配置"
+  cp -a /iptv-api-config/. "$IPTV_DATA_DIR/config/"
+fi
+if [ ! -f "$IPTV_BLOCKLIST_FILE" ]; then
+  mkdir -p "$(dirname "$IPTV_BLOCKLIST_FILE")"
+  touch "$IPTV_BLOCKLIST_FILE"
+fi
+
+rm -rf /iptv-api/config /iptv-api/output
+ln -s "$IPTV_DATA_DIR/config" /iptv-api/config
+ln -s "$IPTV_DATA_DIR/output" /iptv-api/output
+
+# shellcheck source=/dev/null
+. "$APP_WORKDIR/.venv/bin/activate"
+
+if [ -f /proc/net/if_inet6 ]; then
+  IPV6_HTTP_LISTEN="listen [::]:${NGINX_HTTP_PORT};"
 else
-  echo "[entry]   ⚠ iptv-api 未安装, 跳过电视源聚合(仅直播服务)"
+  IPV6_HTTP_LISTEN=""
 fi
 
-# ============================================================
-# 2. Go livetv ================================================
-# ============================================================
-echo "[entry] 启动 Go livetv (AIO=$AIO_PORT PROXY=$PROXY_PORT)"
-if [ -x /usr/local/bin/livetv ]; then
-  /usr/local/bin/livetv >> "$GOLOG" 2>&1 &
-  echo $! > /run/livetv.pid
-  echo "[entry]   Go livetv pid=$(cat /run/livetv.pid)"
-else
-  echo "[entry]   ⚠ 未找到 livetv 二进制"
+sed -e "s/\${APP_PORT}/$APP_PORT/g" \
+    -e "s/\${NGINX_HTTP_PORT}/$NGINX_HTTP_PORT/g" \
+    -e "s/\${NGINX_RTMP_PORT}/$NGINX_RTMP_PORT/g" \
+    -e "s|\${IPV6_HTTP_LISTEN}|$IPV6_HTTP_LISTEN|g" \
+    /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+sed -e "s/\${LIVETV_HTTP_PORT}/$LIVETV_HTTP_PORT/g" \
+    -e "s/\${AIO_PORT}/$AIO_PORT/g" \
+    /etc/nginx/livetv/nginx.conf.template > /etc/nginx/livetv/nginx.conf
+
+write_pid() {
+  printf '%s\n' "$2" > "/run/livetv-$1.pid"
+}
+
+start_iptv_main() {
+  echo "[entry] 启动 iptv-api 定时更新"
+  (cd "$APP_WORKDIR" && exec python -u main.py) >> "$IPTV_UPDATE_LOG" 2>&1 &
+  write_pid iptv-main "$!"
+}
+
+start_iptv_nginx() {
+  echo "[entry] 启动 iptv-api nginx ($NGINX_HTTP_PORT)"
+  nginx -g 'daemon off;' >> "$IPTV_LOG" 2>&1 &
+  write_pid iptv-nginx "$!"
+}
+
+start_iptv_flask() {
+  echo "[entry] 启动 iptv-api API ($APP_PORT)"
+  (cd "$APP_WORKDIR" && exec python -u -m gunicorn service.app:app \
+    -b "127.0.0.1:$APP_PORT" --workers=1 --timeout=1000) >> "$IPTV_LOG" 2>&1 &
+  write_pid iptv-flask "$!"
+}
+
+start_livetv() {
+  echo "[entry] 启动 Go livetv (AIO=$AIO_PORT PROXY=$PROXY_PORT)"
+  /usr/local/bin/livetv >> "$GO_LOG" 2>&1 &
+  write_pid livetv "$!"
+}
+
+start_huya_res() {
+  echo "[entry] 启动虎牙解析 ($RES_PORT)"
+  PORT="$RES_PORT" python3 /opt/livetv/allinone.py >> "$PY_LOG" 2>&1 &
+  write_pid huya-res "$!"
+}
+
+start_huya_flv() {
+  echo "[entry] 启动虎牙 FLV 代理 ($PY_PORT)"
+  ALLINONE_BASE="http://127.0.0.1:$AIO_PORT" \
+  HLS_ROOT="$HLS_DIR" \
+  python3 /opt/livetv/stream-proxy.py "$PY_PORT" >> "$PY_LOG" 2>&1 &
+  write_pid huya-flv "$!"
+}
+
+start_livetv_nginx() {
+  echo "[entry] 启动聚合入口 nginx ($LIVETV_HTTP_PORT)"
+  nginx -p /etc/nginx/livetv/ -c nginx.conf -g 'daemon off;' \
+    >> "$LOG_DIR/nginx.log" 2>&1 &
+  write_pid nginx "$!"
+}
+
+start_iptv_main
+start_iptv_nginx
+start_iptv_flask
+start_livetv
+start_huya_res
+start_huya_flv
+start_livetv_nginx
+
+# 首次同步直播平台当前开播房间；失败时 sync_channels.py 会保留旧文件。
+echo "[entry] 后台同步虎牙/斗鱼当前开播房间"
+python3 /opt/livetv/sync_channels.py \
+  --out "$DATA/lnmp/allinone/channels.json" >> "$LOG_DIR/sync-channels.log" 2>&1 &
+
+# 等待 iptv-api 首次生成 result.m3u，然后立即桥接；不必等到第一个 15 分钟周期。
+(
+  attempts=0
+  while [ "$attempts" -lt 90 ]; do
+    if [ -s /iptv-api/output/result.m3u ] && /opt/livetv/scripts/bridge_iptv.sh; then
+      exit 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 10
+  done
+) &
+
+# 显式写 crontab，避免依赖 Alpine 是否预置 /etc/periodic/6h 调度规则。
+cat > /etc/crontabs/root <<'CRONEOF'
+*/15 * * * * /opt/livetv/scripts/bridge_iptv.sh
+17 */6 * * * python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json" >> "$DATA/lnmp/logs/sync-channels.log" 2>&1
+CRONEOF
+if [ -n "${NAS_HOST:-}" ] && [ -n "${NAS_USER:-}" ] && [ -n "${NAS_M3U:-}" ]; then
+  printf '7,22,37,52 * * * * /opt/livetv/scripts/sync_iptv_from_nas.sh\n' >> /etc/crontabs/root
+  echo "[entry] 已启用可选 NAS 同步"
+elif [ -n "${NAS_HOST:-}${NAS_USER:-}${NAS_M3U:-}" ]; then
+  echo "[entry] NAS 同步未启用：NAS_HOST、NAS_USER、NAS_M3U 必须同时设置" >&2
 fi
+crond -b -l 8
 
-# ============================================================
-# 3. Python 虎牙 ==============================================
-# ============================================================
-echo "[entry] 启动 Python 虎牙解析 (RES=$RES_PORT)"
-PORT=$RES_PORT python3 /opt/livetv/allinone.py >> "$PYLOG" 2>&1 &
-echo $! > /run/huya-res.pid
-echo "[entry]   虎牙解析 pid=$!"
+pid_alive() {
+  pid_file="/run/livetv-$1.pid"
+  [ -s "$pid_file" ] || return 1
+  pid=$(cat "$pid_file")
+  kill -0 "$pid" 2>/dev/null
+}
 
-echo "[entry] 启动 Python 虎牙 FLV 直通 (PY=$PY_PORT)"
-SELF_BASE="http://127.0.0.1:$PY_PORT" \
-ALLINONE_BASE="http://127.0.0.1:$AIO_PORT" \
-HLS_ROOT="$DATA/lnmp/allinone/hls" \
-python3 /opt/livetv/stream-proxy.py $PY_PORT >> "$PYLOG" 2>&1 &
-echo $! > /run/huya-flv.pid
-echo "[entry]   虎牙FLV pid=$!"
+shutdown() {
+  echo "[entry] 收到退出信号，停止子进程"
+  for pid_file in /run/livetv-*.pid; do
+    [ -f "$pid_file" ] || continue
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill "$pid" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
+  exit 0
+}
+trap shutdown INT TERM
 
-# ============================================================
-# 4. 自研 nginx (8081 反代 allinone.m3u) =====================
-# ============================================================
-echo "[entry] 启动 nginx 反代 (8081)"
-if [ -f /etc/nginx/livetv/nginx.conf ]; then
-  nginx -p /etc/nginx/livetv -c /etc/nginx/livetv/nginx.conf -g "daemon off;" >> "$DATA/lnmp/logs/nginx.log" 2>&1 &
-  echo $! > /run/nginx.pid
-  echo "[entry]   nginx pid=$!"
-else
-  echo "[entry]   ⚠ nginx 配置缺失, 跳过反代"
-fi
-
-# ============================================================
-# 4.5 直播白名单自动同步(自研 sync_channels.py, 官方API抓取)=
-# ============================================================
-# 首启: 后台同步一次, 不阻塞服务启动(失败则保留已有/空白名单, Go 全量保底)
-if [ -f /opt/livetv/sync_channels.py ]; then
-  echo "[entry] 同步直播白名单(官方API, 后台)..."
-  python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json"     >> "$DATA/lnmp/logs/sync-channels.log" 2>&1 &
-  # cron 每6小时刷新一次(保持房间列表新鲜)
-  cat > /etc/periodic/6h/sync-channels <<'SYNCEOF'
-#!/bin/sh
-python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json"   >> "$DATA/lnmp/logs/sync-channels.log" 2>&1
-SYNCEOF
-  chmod +x /etc/periodic/6h/sync-channels 2>/dev/null
-  echo "[entry]   首次同步已后台启动 + 每6小时cron"
-else
-  echo "[entry]   ⚠ sync_channels.py 缺失, 跳过白名单同步(用预置/空白名单)"
-fi
-
-# ============================================================
-# 5. 电视源自愈 crond ========================================
-# ============================================================
-echo "[entry] 启动 crond (电视源自愈 + iptv-api输出桥接)"
-# 桥接: iptv-api 的 output/result.m3u → Go livetv 读取的 /data/lnmp/applecms/.iptv-result.m3u
-# 每15分钟: 若 iptv-api 有新 result.m3u 且有效, 复制到 Go 能读的位置(带 last-good 保护)
-cat > /etc/periodic/15min/bridge-iptv <<'BRIDGEEOF'
-#!/bin/sh
-SRC=/iptv-api/output/result.m3u
-DST=/data/lnmp/applecms/.iptv-result.m3u
-[ -f "$SRC" ] || exit 0
-CNT=$(grep -c "^#EXTINF" "$SRC" 2>/dev/null || echo 0)
-if [ "$CNT" -ge 20 ] && grep -qE "央视|卫视|CCTV|📺" "$SRC" 2>/dev/null; then
-  mkdir -p "$(dirname "$DST")"
-  cp -f "$SRC" "$DST.tmp" 2>/dev/null && mv -f "$DST.tmp" "$DST" 2>/dev/null \
-    && echo "[bridge] $(date) 已同步 $CNT 频道电视源" >> /data/lnmp/logs/bridge.log
-fi
-BRIDGEEOF
-chmod +x /etc/periodic/15min/bridge-iptv
-# NAS 同步脚本可选用(若用户仍想从 NAS 拉源); 容器内默认用 iptv-api 自产源
-if [ -f /opt/livetv/scripts/sync_iptv_from_nas.sh ] && [ -n "${NAS_HOST:-}" ]; then
-  cp /opt/livetv/scripts/sync_iptv_from_nas.sh /etc/periodic/15min/sync-iptv 2>/dev/null
-  chmod +x /etc/periodic/15min/sync-iptv 2>/dev/null
-  echo "[entry]   NAS 同步已启用 (NAS_HOST=$NAS_HOST)"
-fi
-crond -b 2>&1 || echo "[entry]   crond 启动跳过"
-echo "[entry]   定时任务: /etc/periodic/15min/ (每15分钟)"
-
-# ============================================================
-# 存活守护: 任一服务停止自动拉起 ==============================
-# ============================================================
-trap 'echo "[entry] 收到信号, 清理退出"; for p in /run/*.pid; do kill $(cat $p) 2>/dev/null; done; exit 0' INT TERM
-echo "[entry] ★ 全部服务启动完成, 进入守护循环"
+echo "[entry] 全部服务已启动；播放列表: http://<服务器>:$LIVETV_HTTP_PORT/allinone.m3u"
 while :; do
   sleep 20
-  for svc in livetv huya-res huya-flv nginx; do
-    [ -f /run/$svc.pid ] || continue
-    PID=$(cat /run/$svc.pid 2>/dev/null)
-    if ! kill -0 "$PID" 2>/dev/null; then
-      case "$svc" in
-        livetv)   echo "[guard] Go livetv 挂了, 重启"; /usr/local/bin/livetv >> "$GOLOG" 2>&1 & echo $! > /run/livetv.pid;;
-        huya-res) echo "[guard] 虎牙解析挂了, 重启"; PORT=$RES_PORT python3 /opt/livetv/allinone.py >> "$PYLOG" 2>&1 & echo $! > /run/huya-res.pid;;
-        huya-flv) echo "[guard] 虎牙FLV挂了, 重启"; HLS_ROOT="$DATA/lnmp/allinone/hls" python3 /opt/livetv/stream-proxy.py $PY_PORT >> "$PYLOG" 2>&1 & echo $! > /run/huya-flv.pid;;
-        nginx)    echo "[guard] nginx挂了, 重启"; nginx -p /etc/nginx/livetv -c /etc/nginx/livetv/nginx.conf -g "daemon off;" >> "$DATA/lnmp/logs/nginx.log" 2>&1 & echo $! > /run/nginx.pid;;
-      esac
+  for service in iptv-main iptv-nginx iptv-flask livetv huya-res huya-flv nginx; do
+    if pid_alive "$service"; then
+      continue
     fi
+    echo "[guard] $service 已退出，重新启动"
+    case "$service" in
+      iptv-main) start_iptv_main ;;
+      iptv-nginx) start_iptv_nginx ;;
+      iptv-flask) start_iptv_flask ;;
+      livetv) start_livetv ;;
+      huya-res) start_huya_res ;;
+      huya-flv) start_huya_flv ;;
+      nginx) start_livetv_nginx ;;
+    esac
   done
 done

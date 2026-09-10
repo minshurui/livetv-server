@@ -6,13 +6,13 @@ import (
 )
 
 type cacheEntry struct {
-	val     string // "" 表示失败/无流
-	expire  time.Time
+	val    string // "" 表示失败/无流
+	expire time.Time
 }
 
 type ttlCache struct {
-	mu    sync.Mutex
-	m     map[string]cacheEntry
+	mu sync.Mutex
+	m  map[string]cacheEntry
 }
 
 func newTTLCache() *ttlCache {

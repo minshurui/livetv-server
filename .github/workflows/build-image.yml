@@ -5,9 +5,9 @@ on:
   push:
     # codex/** 用于在合并前验证重构分支；main 仍负责正式发布。
     branches: [main, "codex/**"]
-    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "README.md", "dockerhub-description.md", ".github/workflows/build-image.yml"]
   pull_request:
-    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", ".github/workflows/build-image.yml"]
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "README.md", "dockerhub-description.md", ".github/workflows/build-image.yml"]
   workflow_dispatch:                 # GitHub 页面手动触发
 
 concurrency:
@@ -20,50 +20,63 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.14'
       - name: Go unit tests
-        run: go test ./...
+        run: |
+          go vet ./...
+          go test ./...
       - name: Python syntax checks
         run: |
           python -m py_compile docker/*.py
           python -m unittest discover -s tests -v
       - name: Shell syntax checks
         run: |
-          sh -n docker/entry.sh
-          bash -n docker/scripts/*.sh
+          sh -n docker/*.sh docker/scripts/bridge_iptv.sh
+          bash -n switch.sh docker/scripts/sync_iptv_from_nas.sh
+          shellcheck -x docker/*.sh docker/scripts/*.sh switch.sh
+      - name: Compose validation
+        run: docker compose -f docker/docker-compose.yml config --quiet
 
   verify-image:
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            cache-scope: verify-amd64
+          - platform: linux/arm64
+            cache-scope: verify-arm64
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Clone iptv-api build dependency
-        run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - name: Verify amd64 and arm64 image build
-        uses: docker/build-push-action@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Verify ${{ matrix.platform }} image build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
           outputs: type=cacheonly
           build-args: |
-            BUILD_PROXY=
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.cache-scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
 
   build:
     needs: verify-image
     # 审核分支只验证、不推镜像；仅 main 或手动运行允许发布。
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -77,7 +90,7 @@ jobs:
       ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
 
     # ⚠ 前置配置: GitHub 仓库 → Settings → Secrets and variables → Actions 新增:
-    #   Docker Hub(必配, 否则跳过推送):
+    #   Docker Hub(必配, 缺失时发布 job 会明确失败):
     #     DOCKERHUB_USERNAME = minshurui
     #     DOCKERHUB_TOKEN    = Docker Hub Access Token(https://hub.docker.com/settings/security)
     #   阿里云容器镜像 ACR(选配; 配了才推阿里云):
@@ -90,21 +103,34 @@ jobs:
 
     steps:
       - name: Checkout livetv 仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # 前置: clone iptv-api(构建必需, 已 .gitignore)
-      - name: Clone iptv-api build dependency
-        run: git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Validate registry configuration
+        shell: bash
+        run: |
+          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
+            echo "::error::缺少 DOCKERHUB_USERNAME 或 DOCKERHUB_TOKEN，无法发布 Docker Hub 镜像"
+            exit 1
+          fi
+          aliyun_values=("$ALIYUN_REGISTRY" "$ALIYUN_NAMESPACE" "$ALIYUN_REPO" "$ALIYUN_USERNAME" "$ALIYUN_PASSWORD")
+          aliyun_set=0
+          for value in "${aliyun_values[@]}"; do
+            [[ -n "$value" ]] && aliyun_set=$((aliyun_set + 1))
+          done
+          if [[ "$aliyun_set" -ne 0 && "$aliyun_set" -ne 5 ]]; then
+            echo "::error::阿里云 ACR 配置不完整；请设置全部五项或全部留空"
+            exit 1
+          fi
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       # ---- 登录 Docker Hub(已配才执行)----
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -112,7 +138,7 @@ jobs:
 
       # ---- 登录阿里云 ACR(已配才执行)----
       - name: Login to Aliyun ACR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.ALIYUN_REGISTRY != '' && env.ALIYUN_USERNAME != '' && env.ALIYUN_PASSWORD != ''
         with:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
@@ -123,7 +149,7 @@ jobs:
       # 用两次 build-push-action(第二次只推阿里云 tag), 规避空 tag 污染
 
       - name: Build & push (Docker Hub)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         with:
           context: .
@@ -134,12 +160,22 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:${{ github.sha }}
           build-args: |
-            BUILD_PROXY=
+            VCS_REF=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone
+          readme-filepath: ./dockerhub-description.md
+          short-description: 直播源聚合、自愈、录播过滤，支持 amd64/arm64
+
       - name: Build & push (Aliyun ACR)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         if: env.ALIYUN_REGISTRY != '' && env.ALIYUN_NAMESPACE != '' && env.ALIYUN_REPO != '' && env.ALIYUN_USERNAME != '' && env.ALIYUN_PASSWORD != ''
         with:
           context: .
@@ -150,7 +186,7 @@ jobs:
             ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ secrets.ALIYUN_REPO }}:latest
             ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ secrets.ALIYUN_REPO }}:${{ github.sha }}
           build-args: |
-            BUILD_PROXY=
+            VCS_REF=${{ github.sha }}
           # 复用 Docker Hub 步的构建缓存, 避免重复编译
           cache-from: type=gha
           cache-to: type=gha,mode=max

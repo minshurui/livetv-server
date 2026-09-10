@@ -29,7 +29,8 @@ type aioHandler struct{}
 // 换 WiFi 后手机 IP 会变, 若 m3u 还用启动时的 PUBLIC_HOST 快照就会失效;
 // 改为跟随访问者的 Host —— 用户用哪个地址访问8081, m3u里就用哪个地址,
 // 换网络后无需改任何配置。例如:
-//   http://127.0.0.1:8081/allinone.m3u     → 流地址 http://127.0.0.1:19090/...
+//
+//	http://127.0.0.1:8081/allinone.m3u     → 流地址 http://127.0.0.1:19090/...
 func reqHost(r *http.Request) string {
 	h := strings.TrimSpace(r.Host)
 	if host, _, err := net.SplitHostPort(h); err == nil {
@@ -99,7 +100,10 @@ func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target = resolve(rid)
 	}
 	if target == "" {
-		target = TEST_STREAM
+		// 旧实现跳到测试录像，播放器会把离线房间误认为“可播直播”。
+		// 保持路径接口不变，但用明确的 404 表示未开播/解析失败。
+		http.Error(w, "offline (room not live)", http.StatusNotFound)
+		return
 	}
 	w.Header().Set("Location", target)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

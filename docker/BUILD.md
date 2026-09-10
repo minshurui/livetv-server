@@ -1,66 +1,88 @@
-# 构建说明 — WSL Ubuntu 上双架构构建
+# 镜像维护与发布
 
-把 `livetv` 仓库放到 **WSL Ubuntu**,构建"直播全链路 + 电视源自愈"的 **单 Alpine 容器**。
-镜像支持 **amd64 (x86_64) + arm64** 双端,任何有 Docker 的平台都能跑。
+普通用户请看 [Docker 部署文档](../docs/docker.md)。本文件面向镜像维护者。
 
-## 前提: clone iptv-api (构建必需)
+## 当前构建策略
+
+Dockerfile 分为两层：
+
+1. `golang:1.26-alpine` 运行 Go 测试并编译静态二进制。
+2. 固定 digest 的 `guovern/iptv-api` 多架构镜像提供 Python 依赖、FFmpeg 和 nginx-rtmp，再复制本项目服务。
+
+这样避免在 arm64 QEMU 环境中重复编译 nginx-rtmp，也避免每次构建从 Alpine/PyPI 下载大量编译依赖。上游基础镜像 digest 同时包含 amd64、arm64 和 arm/v7；本项目正式发布 amd64、arm64。
+
+## 单架构验证
+
 ```bash
-git clone --depth 1 https://github.com/guovern/iptv-api.git src/iptv-api
-```
-> 已入 `.gitignore`,不入 GitHub。需要其 Pipfile + 源码 + nginx.conf.template。
-
-## 构建环境准备 (WSL Ubuntu)
-```bash
-sudo apt install docker.io docker-compose
-sudo systemctl enable docker --now || sudo service docker start
-docker buildx version          # v0.15+ 有 multi-platform
-docker run --privileged --rm tonistiigi/binfmt --install amd64,arm64   # QEMU 交叉
-echo | docker buildx create --name multiarch --driver docker-container --use
-```
-
-## 双端版构建 (amd64 + arm64, 一次出两镜像)
-```bash
-# 完整功能(含 ffmpeg)
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t minshurui/livetv-allinone:latest \
-  -t minshurui/livetv-allinone:amd64 \
-  -t minshurui/livetv-allinone:arm64 --push .
-
-# 裁剪版(无 ffmpeg, 省 ~80MB; 不含 HLS 转码/源截图测速)
-docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg WITH_FFMPEG=0 \
-  -t minshurui/livetv-allinone:slim --push .
+docker build --pull -t livetv-allinone:test .
+docker run -d --name livetv-test \
+  -p 8081:8081 -p 19090:19090 -p 19091:19091 \
+  -v "$PWD/test-data:/data" \
+  livetv-allinone:test
+docker inspect --format '{{.State.Health.Status}}' livetv-test
+docker logs --tail=200 livetv-test
 ```
 
-## 单架构快速验证 (仅 amd64)
+## 双架构验证
+
 ```bash
-# 若 nginx.org/github 下载慢/被墙, 传代理: --build-arg BUILD_PROXY=http://代理:端口
-docker build --build-arg BUILD_PROXY=http://proxy.example:7890 -t minshurui/livetv-allinone:test .
-docker run -d --name t -p 8081:8081 -p 8080:8080 minshurui/livetv-allinone:test
-curl localhost:8081/healthz
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --output type=cacheonly .
 ```
 
-## 部署
+不要对多架构构建使用 `--load`，本机 Docker 镜像存储不能一次加载多个平台。
+
+## 发布
+
 ```bash
-docker compose -f docker/docker-compose.yml up -d
-# docker pull 会自动按平台拉 amd64 或 arm64
+docker login
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t your-name/livetv-allinone:latest \
+  -t your-name/livetv-allinone:$(git rev-parse HEAD) \
+  --build-arg VCS_REF=$(git rev-parse HEAD) \
+  --push .
 ```
 
-## 端口
-| 端口 | 服务 |
-|---|---|
-| 35455 | Go livetv 解析/m3u |
-| 19090 | Go 斗鱼 FLV |
-| 35456 | Python 虎牙 301 解析 |
-| 19091 | Python 虎牙 FLV 直通 |
-| 8081 | 自研 nginx 反代 allinone.m3u |
-| 8080 | iptv-api Web UI |
+仓库 GitHub Actions 在测试和两种架构验证都通过后执行同样的发布流程。
 
-## 体积
-| 版本 | 预估 |
-|---|---|
-| latest (含 ffmpeg) | ~250MB |
-| slim (WITH_FFMPEG=0) | ~170MB |
+## 更新 `iptv-api` 基础镜像
 
-## 数据卷
-`./data:/data` → channels.json、电视源、日志。iptv-api 生成 result.m3u 每 15min 桥接给 Go。
+不要直接把 Dockerfile 改回 `latest`。先确认上游 manifest 包含 amd64 和 arm64，再把 `IPTV_API_IMAGE` 更新为多架构 manifest digest：
+
+```bash
+docker buildx imagetools inspect guovern/iptv-api:latest
+```
+
+更新后必须执行：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 --output type=cacheonly .
+```
+
+也可以临时验证候选镜像而不改文件：
+
+```bash
+docker buildx build \
+  --build-arg IPTV_API_IMAGE=guovern/iptv-api@sha256:<manifest-digest> \
+  --platform linux/amd64,linux/arm64 \
+  --output type=cacheonly .
+```
+
+## GitHub Secrets
+
+Docker Hub 发布需要：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+阿里云 ACR 为可选项：
+
+- `ALIYUN_REGISTRY`
+- `ALIYUN_NAMESPACE`
+- `ALIYUN_REPO`
+- `ALIYUN_USERNAME`
+- `ALIYUN_PASSWORD`
+
+Secrets 先映射到 job 级 `env`，`if` 只判断 `env.*`，避免 GitHub Actions 在不支持的表达式上下文中解析 `secrets.*`。任何曾公开发送、出现在日志或提交中的令牌都必须立即撤销。

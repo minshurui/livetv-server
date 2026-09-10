@@ -160,8 +160,8 @@ func resolveHuya(rid string) string {
 
 // ---------------- 斗鱼 ----------------
 var (
-	douyuRidRe    = regexp.MustCompile(`rid":(\d{1,8}),"vipId`)
-	douyuShowRe   = regexp.MustCompile(`"showTime"\s*:\s*(\d{10})`)
+	douyuRidRe  = regexp.MustCompile(`rid":(\d{1,8}),"vipId`)
+	douyuShowRe = regexp.MustCompile(`"showTime"\s*:\s*(\d{10})`)
 )
 
 func pageShowAgeHours(page string) float64 {

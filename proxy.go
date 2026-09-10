@@ -25,10 +25,13 @@ import (
 
 // httpClientV4: 强制 IPv4 + 禁 gzip 的共享客户端。
 // ① 虎牙 CDN 同时有 v4/v6 记录, 手机 IPv6 链路不稳 → 周期性断流 1s(播放卡顿)。
-//    与 Python stream-proxy 的 curl -4 对齐, 强制走 tcp4。
+//
+//	与 Python stream-proxy 的 curl -4 对齐, 强制走 tcp4。
+//
 // ② Go http.Transport 默认自动发 Accept-Encoding: gzip 并透明解压,
-//    虎牙 CDN 对带 gzip 头的请求直接断开/限流(实验: 无gzip=连续, 有gzip=0字节)。
-//    DisableCompression: true = 不发送 Accept-Encoding, 与 curl 默认一致。
+//
+//	虎牙 CDN 对带 gzip 头的请求直接断开/限流(实验: 无gzip=连续, 有gzip=0字节)。
+//	DisableCompression: true = 不发送 Accept-Encoding, 与 curl 默认一致。
 var httpClientV4 = &http.Client{
 	Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -247,17 +250,17 @@ const flvTagHeaderLen = 11 // 1 type + 3 datasize + 3 ts + 1 tsext + 3 streamid
 // 之后所有 tag 时间戳单调递增 → 播放器完全无感。
 // 返回: 客户端断开=true(写失败), 上游 EOF/错误=false。
 type flvStreamWriter struct {
-	br      io.Reader
-	w       io.Writer
-	flusher http.Flusher
-	baseTS  uint32 // 续流模式: 上一连接最后的 tag 时间戳
-	rewrite bool   // 是否重写时间戳(仅续流连接)
-	offset  uint32 // 应用到所有 tag 的偏移(基于首 IDR 计算, 之后不改)
+	br        io.Reader
+	w         io.Writer
+	flusher   http.Flusher
+	baseTS    uint32 // 续流模式: 上一连接最后的 tag 时间戳
+	rewrite   bool   // 是否重写时间戳(仅续流连接)
+	offset    uint32 // 应用到所有 tag 的偏移(基于首 IDR 计算, 之后不改)
 	offsetSet bool
-	seenIDR bool   // 续流连接: 是否已遇到第一个视频关键帧(IDR)
-	lastVTS uint32 // 已写出的视频最大时间戳(audio/video 各自单调, 互不挤占)
-	lastATS uint32 // 已写出的音频最大时间戳
-	written int64  // 写出的字节数
+	seenIDR   bool   // 续流连接: 是否已遇到第一个视频关键帧(IDR)
+	lastVTS   uint32 // 已写出的视频最大时间戳(audio/video 各自单调, 互不挤占)
+	lastATS   uint32 // 已写出的音频最大时间戳
+	written   int64  // 写出的字节数
 }
 
 func newFLVStreamWriter(r io.Reader, w io.Writer, flusher http.Flusher, baseTS uint32, rewrite bool) *flvStreamWriter {
@@ -637,7 +640,7 @@ func startFFmpeg(platform, rid string) (result *hlsProc) {
 	// 回源: 不直连虎牙 CDN(单连接限流会被掐断), 走本地 19090 续流层。
 	// livetv 内部续流(换新签名 URL + FLV tag 时间戳重写)保证回源流不断,
 	// ffmpeg 只需持续封装, 断流由续流层兜底。
-	realURL := fmt.Sprintf("http://127.0.0.1:19090/stream/%s/%s", platform, rid)
+	realURL := fmt.Sprintf("http://127.0.0.1:%s/stream/%s/%s", PROXY_PORT, platform, rid)
 	d := filepath.Join(HLSRoot, key)
 	_ = os.MkdirAll(d, 0755)
 	// 清旧分片

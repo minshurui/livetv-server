@@ -29,16 +29,19 @@ var (
 	AIO_PORT    = envOr("AIO_PORT", "35455")
 	PROXY_PORT  = envOr("PROXY_PORT", "19090")
 	PY_PORT     = envOr("PY_PORT", "19091") // 虎牙: Python stream-proxy (FLV 直通)
+	// 宿主机映射端口可与容器内部端口不同；播放列表必须写外部端口。
+	PUBLIC_AIO_PORT   = envOr("PUBLIC_AIO_PORT", AIO_PORT)
+	PUBLIC_PROXY_PORT = envOr("PUBLIC_PROXY_PORT", PROXY_PORT)
+	PUBLIC_PY_PORT    = envOr("PUBLIC_PY_PORT", PY_PORT)
 )
 
 const (
-	UA_PC      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36"
-	UA_ANDROID = "Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Mobile Safari/537.36"
-	TEST_STREAM = "https://cdn.jsdelivr.net/gh/feiyang666999/testvideo/sdr1080pvideo/playlist.m3u8"
-	TIMEOUT_S = 15
-	FAIL_TTL  = 15  // 解析失败缓存秒数
-	ALIVE_MAXAGE = 3600 // 白名单新鲜窗口 (live-m3u.php 同款 3600)
-	ALIVE_TRIGGER = 300 // 超过此秒数 → m3u 拉取触发后台健康检查
+	UA_PC           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36"
+	UA_ANDROID      = "Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Mobile Safari/537.36"
+	TIMEOUT_S       = 15
+	FAIL_TTL        = 15   // 解析失败缓存秒数
+	ALIVE_MAXAGE    = 3600 // 白名单新鲜窗口 (live-m3u.php 同款 3600)
+	ALIVE_TRIGGER   = 300  // 超过此秒数 → m3u 拉取触发后台健康检查
 	HealthIntervalS = 1800 // 全量健康检查周期(30min)
 )
 

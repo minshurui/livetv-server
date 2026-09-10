@@ -78,10 +78,12 @@ def build_extinf(game, display, is_huya):
 def main():
     ap = argparse.ArgumentParser(description="自研虎牙/斗鱼白名单获取器")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--huya-pages", type=int, default=15)
-    ap.add_argument("--douyu-pages", type=int, default=20)
-    ap.add_argument("--min-huya", type=int, default=500)
-    ap.add_argument("--min-douyu", type=int, default=500)
+    ap.add_argument("--huya-pages", type=int, default=int(os.environ.get("SYNC_HUYA_PAGES", "15")))
+    ap.add_argument("--douyu-pages", type=int, default=int(os.environ.get("SYNC_DOUYU_PAGES", "20")))
+    # 500 会让冷门时段或平台接口缩减时首次启动永远没有频道；只用合理下限
+    # 防止错误响应覆盖 last-good 文件，实际可用性继续由拉流健康检查负责。
+    ap.add_argument("--min-huya", type=int, default=int(os.environ.get("SYNC_MIN_HUYA", "20")))
+    ap.add_argument("--min-douyu", type=int, default=int(os.environ.get("SYNC_MIN_DOUYU", "20")))
     args = ap.parse_args()
     if args.out: out_path = args.out
     else:
@@ -96,8 +98,9 @@ def main():
         "huya": [[rid, build_extinf(g, d, True)] for rid, g, d in huya],
         "douyu": [[rid, build_extinf(g, d, False)] for rid, g, d in douyu],
     }
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fd, tmpf = tempfile.mkstemp(dir=os.path.dirname(out_path), prefix=".channels-", suffix=".tmp")
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    fd, tmpf = tempfile.mkstemp(dir=out_dir, prefix=".channels-", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f: json.dump(result, f, ensure_ascii=False)
     os.replace(tmpf, out_path)
     print(f"=== 写入完成: 虎牙{len(huya)} + 斗鱼{len(douyu)} = {len(huya)+len(douyu)} 房间 ===")

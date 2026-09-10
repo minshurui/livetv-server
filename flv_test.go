@@ -84,7 +84,10 @@ func TestReconnectMonotonic(t *testing.T) {
 		t.Fatalf("无输出")
 	}
 	// 解析输出 tag
-	type tv struct{ typ byte; ts uint32 }
+	type tv struct {
+		typ byte
+		ts  uint32
+	}
 	var tags []tv
 	i := 0
 	for i+11 <= len(b) {

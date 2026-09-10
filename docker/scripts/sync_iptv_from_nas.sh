@@ -17,7 +17,7 @@
 # 环境变量(均可覆盖):
 #   NAS_HOST    NAS 主机名或 IP（必填）
 #   NAS_USER    SSH 用户          （必填）
-#   NAS_M3U     NAS 自愈源路径    (默认 /vol2/apps/iptv-api/output/result.m3u)
+#   NAS_M3U     NAS 自愈源路径    （必填，不写死任何个人目录）
 #   DST_FILE    本地输出路径      (默认 applecms/.iptv-result.m3u)
 #   MIN_LINES   内容保护: 少于此时频道数视为失败不覆盖 (默认 20)
 # ============================================================
@@ -25,18 +25,22 @@ set -euo pipefail
 
 NAS_HOST="${NAS_HOST:?请设置 NAS_HOST，例如 nas.example.internal}"
 NAS_USER="${NAS_USER:?请设置 NAS_USER}"
-NAS_M3U="${NAS_M3U:-/vol2/apps/iptv-api/output/result.m3u}"
+NAS_M3U="${NAS_M3U:?请设置 NAS_M3U，例如 /path/to/iptv-api/output/result.m3u}"
 HOME_DIR="${DATA:-$HOME}"
 DST_FILE="${DST_FILE:-${HOME_DIR}/lnmp/applecms/.iptv-result.m3u}"
 MIN_LINES="${MIN_LINES:-20}"
-SSH_OPT="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o BatchMode=yes"
+SSH_OPT=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o BatchMode=yes)
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
 # 1) 从 NAS 拉取(经 SSH cat)
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
-if ! timeout 20 ssh $SSH_OPT "${NAS_USER}@${NAS_HOST}" "cat '${NAS_M3U}'" >"$TMP" 2>/dev/null; then
+if [[ ! "$NAS_M3U" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    log "FAIL NAS_M3U 只能使用绝对路径及字母、数字、点、下划线、横线和斜杠"
+    exit 2
+fi
+if ! timeout 20 ssh "${SSH_OPT[@]}" "${NAS_USER}@${NAS_HOST}" "cat -- '${NAS_M3U}'" >"$TMP" 2>/dev/null; then
     log "FAIL 拉取 NAS 自愈源失败 (${NAS_HOST}) — 保留本地旧文件"
     exit 1
 fi

@@ -91,9 +91,9 @@ func lineM3U(platform, host string) string {
 		sb.WriteString(addGroupPrefix(inf, prefix) + "\n")
 		if platform == "huya" {
 			// 虎牙: 走 Python stream-proxy(19091) FLV 直通, 断流1s自行续播(不折腾续流层)
-			sb.WriteString("http://" + host + ":" + PY_PORT + "/stream/huya/" + rid + "\n")
+			sb.WriteString("http://" + host + ":" + PUBLIC_PY_PORT + "/stream/huya/" + rid + "\n")
 		} else {
-			sb.WriteString("http://" + host + ":" + AIO_PORT + "/" + platform + "/" + rid + "\n")
+			sb.WriteString("http://" + host + ":" + PUBLIC_AIO_PORT + "/" + platform + "/" + rid + "\n")
 		}
 	}
 	return sb.String()
@@ -125,7 +125,7 @@ func aggregateM3U(host string) string {
 		}
 		sb.WriteString(addGroupPrefix(inf, "虎牙") + "\n")
 		// 虎牙: Python stream-proxy(19091) FLV 直通
-		sb.WriteString("http://" + host + ":" + PY_PORT + "/stream/huya/" + rid + "\n")
+		sb.WriteString("http://" + host + ":" + PUBLIC_PY_PORT + "/stream/huya/" + rid + "\n")
 	}
 	// 斗鱼: 白名单过滤, 19090 转发
 	for _, e := range ch["douyu"] {
@@ -137,7 +137,7 @@ func aggregateM3U(host string) string {
 			continue
 		}
 		sb.WriteString(addGroupPrefix(inf, "斗鱼") + "\n")
-		sb.WriteString("http://" + host + ":" + PROXY_PORT + "/stream/douyu/" + rid + "\n")
+		sb.WriteString("http://" + host + ":" + PUBLIC_PROXY_PORT + "/stream/douyu/" + rid + "\n")
 	}
 	// 电视快照 (去 #EXTM3U 头)
 	if tv, err := os.ReadFile(TvF); err == nil {
@@ -156,4 +156,3 @@ func trimExtm3uHeader(s string) string {
 	s = strings.TrimLeft(s, "\r\n \t\ufeff")
 	return s
 }
-

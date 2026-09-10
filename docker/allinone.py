@@ -25,8 +25,6 @@ UA_PC = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
          "(KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36")
 TIMEOUT = 15
 FAIL_CACHE_TTL = 15  # 解析失败(None)的缓存秒数: 刚开播/限流恢复的房间最多 15s 内脱离"坏房"状态
-TEST_STREAM = "https://cdn.jsdelivr.net/gh/feiyang666999/testvideo/sdr1080pvideo/playlist.m3u8"
-
 _cache = {}
 _cache_lock = threading.Lock()
 
@@ -338,7 +336,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         fresh = "fresh=1" in qs
         target = resolver(rid, nocache=True) if fresh else resolver(rid)
         if not target:
-            target = TEST_STREAM
+            self.send_error(404, "offline (room not live)")
+            return
         self.send_response(301)
         self.send_header("Location", target)
         self.send_header("Content-Type", "text/html; charset=utf-8")

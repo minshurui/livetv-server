@@ -59,17 +59,15 @@ def resolve_with_curl(path):
     """用 curl 拿签名 URL: -I 请求 allinone, 提取 Location (301)"""
     try:
         out = subprocess.run(
-            ["curl", "-sS", "-m", "15", "-D", "-", "-o", "/dev/null",
+            ["curl", "-sS", "-f", "-m", "15", "-D", "-", "-o", "/dev/null",
              ALLINONE_BASE + path],
             capture_output=True, text=True, timeout=20)
+        if out.returncode != 0:
+            return None
         for line in out.stdout.splitlines():
             if line.lower().startswith("location:"):
                 return line.split(":", 1)[1].strip()
-        out2 = subprocess.run(
-            ["curl", "-sS", "-m", "15", "-L", "-o", "/dev/null",
-             "-w", "%{url_effective}", ALLINONE_BASE + path],
-            capture_output=True, text=True, timeout=20)
-        return out2.stdout.strip() or None
+        return None
     except Exception as e:
         sys.stderr.write(f"  resolve err: {e}\n")
         return None
@@ -81,11 +79,8 @@ def start_ffmpeg(platform, rid):
         st = hls_state.get(key)
         if st and st["proc"].poll() is None:
             return st
-    # 先 resolve 拿 CDN 签名 URL; 拿不到再退回本机 FLV 直通
+    # 先 resolve 拿 CDN 签名 URL；拿不到就明确失败，避免递归请求本代理。
     real_url = resolve_with_curl(f"/{platform}/{rid}?fresh=1")
-    if not real_url:
-        self_base = os.environ.get("SELF_BASE", f"http://127.0.0.1:{PORT}")
-        real_url = f"{self_base}/stream/{platform}/{rid}"
     if not real_url:
         sys.stderr.write(f"  [hls] resolve failed {key}\n")
         return None
@@ -221,7 +216,7 @@ class Handler(BaseHTTPRequestHandler):
         # ---- FLV 直通模式 ----
         real_url = resolve_with_curl(path)
         if not real_url:
-            self.send_error(502, "resolve failed")
+            self.send_error(404, "offline (room not live)")
             return
         # 上游回退到测试流(jsdelivr m3u8): 该房间未开播/已失效 → 明确 404, 不转发假流
         if "jsdelivr" in real_url or "testvideo" in real_url or "feiyang666999" in real_url \

@@ -1,5 +1,5 @@
 # livetv-allinone 一键部署
-# 默认运行已发布镜像；本地构建请使用 --build，且先准备 src/iptv-api（见 docs/docker.md）。
+# 默认运行已发布镜像；本地构建使用 --build，不需要额外克隆依赖。
 services:
   livetv:
     build:
@@ -8,22 +8,39 @@ services:
     image: ${LIVETV_IMAGE:-minshurui/livetv-allinone:latest}
     container_name: livetv
     restart: unless-stopped
+    init: true
     ports:
-      - "35455:35455"   # Go 解析/m3u
-      - "19090:19090"   # Go 斗鱼 FLV
-      - "35456:35456"   # Python 虎牙 301 解析
-      - "19091:19091"   # Python 虎牙 FLV 直通
-      - "8081:8081"     # nginx 反代 allinone.m3u
-      - "8080:8080"     # iptv-api Web UI
+      - "${HOST_AIO_PORT:-35455}:${AIO_PORT:-35455}"       # Go 解析/m3u
+      - "${HOST_PROXY_PORT:-19090}:${PROXY_PORT:-19090}"   # Go 斗鱼 FLV
+      - "${HOST_RES_PORT:-35456}:${RES_PORT:-35456}"       # Python 兼容解析
+      - "${HOST_PY_PORT:-19091}:${PY_PORT:-19091}"         # Python 虎牙 FLV
+      - "${HOST_LIVETV_PORT:-8081}:${LIVETV_HTTP_PORT:-8081}" # 播放列表入口
+      - "${HOST_IPTV_UI_PORT:-8080}:${NGINX_HTTP_PORT:-8080}" # iptv-api UI
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       AIO_PORT: ${AIO_PORT:-35455}
       PROXY_PORT: ${PROXY_PORT:-19090}
       PY_PORT: ${PY_PORT:-19091}
       RES_PORT: ${RES_PORT:-35456}
+      PUBLIC_AIO_PORT: ${HOST_AIO_PORT:-35455}
+      PUBLIC_PROXY_PORT: ${HOST_PROXY_PORT:-19090}
+      PUBLIC_PY_PORT: ${HOST_PY_PORT:-19091}
       TZ: ${TZ:-Asia/Shanghai}
       APP_PORT: ${APP_PORT:-5180}
       NGINX_HTTP_PORT: ${NGINX_HTTP_PORT:-8080}
       NGINX_RTMP_PORT: ${NGINX_RTMP_PORT:-1935}
+      LIVETV_HTTP_PORT: ${LIVETV_HTTP_PORT:-8081}
+      IPTV_MIN_CHANNELS: ${IPTV_MIN_CHANNELS:-20}
+      IPTV_REJECT_VOD: ${IPTV_REJECT_VOD:-1}
+      IPTV_BLOCKLIST: ${IPTV_BLOCKLIST:-}
+      SYNC_MIN_HUYA: ${SYNC_MIN_HUYA:-20}
+      SYNC_MIN_DOUYU: ${SYNC_MIN_DOUYU:-20}
     volumes:
       - ${LIVETV_DATA_DIR:-../data}:/data
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
