@@ -179,7 +179,7 @@ func (h proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 拉流: 校验 FLV 首字节, 坏则 fresh 重试一次
-	stream := openAndServe(w, platform, rid, realURL, fresh)
+	stream := openAndServe(w, platform, rid, realURL)
 	if stream {
 		return
 	}
@@ -191,7 +191,7 @@ func (h proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stream not FLV", 502)
 		return
 	}
-	openAndServe(w, platform, rid, realURL2, true)
+	openAndServe(w, platform, rid, realURL2)
 }
 
 func delCacheFor(platform, rid string) {
@@ -385,7 +385,7 @@ func (f *flvStreamWriter) pump() bool {
 // 虎牙 CDN 对单条连接限流(~0.5-2MB 后断开), 若直接断开, 播放器感知断流→自行
 // 重连→产生 1s 黑屏卡顿。本函数在上游断开后自动清缓存换新签名 URL 重新连接,
 // 解析 FLV tag 并重写时间戳为单调递增, 在同一客户端连接内无缝续写 → 播放器无感知。
-func openAndServe(w http.ResponseWriter, platform, rid, rawURL string, alreadyFresh bool) bool {
+func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 	const maxReconn = 600 // 大上限: 直播无限时长, 正常终止靠客户端断开 / resolve empty / 连续失败
 	const maxConsecFail = 3
 
@@ -536,7 +536,7 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string, alreadyFr
 		if n > head {
 			src = io.MultiReader(bytes.NewReader(first[head:n]), br)
 		}
-		sw := newFLVStreamWriter(src, w, flusher, lastTS, false) // 关闭时间戳改写:纯转发,播放器自行处理断流
+		sw := newFLVStreamWriter(src, w, flusher, lastTS, reconn > 0)
 		clientClosed := sw.pump()
 		// baseTS 锚点用视频最后时间戳(续流从 IDR 续, 保证画面时间连续)
 		if sw.lastVTS != 0 {
@@ -578,8 +578,9 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string, alreadyFr
 
 // ---------------- HLS (ffmpeg) ----------------
 var (
-	hlsMu    sync.Mutex
-	hlsState = map[string]*hlsProc{}
+	hlsMu       sync.Mutex
+	hlsState    = map[string]*hlsProc{}
+	hlsStarting = map[string]chan struct{}{}
 )
 
 type hlsProc struct {
@@ -587,16 +588,46 @@ type hlsProc struct {
 	dir     string
 	last    time.Time
 	started time.Time
+	done    chan struct{}
 }
 
-func startFFmpeg(platform, rid string) *hlsProc {
+func hlsProcDone(st *hlsProc) bool {
+	select {
+	case <-st.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func startFFmpeg(platform, rid string) (result *hlsProc) {
 	key := platform + "_" + rid
 	hlsMu.Lock()
-	if st, ok := hlsState[key]; ok && st.cmd.ProcessState == nil {
+	if st, ok := hlsState[key]; ok && !hlsProcDone(st) {
 		hlsMu.Unlock()
 		return st
 	}
+	delete(hlsState, key)
+	if ready, ok := hlsStarting[key]; ok {
+		hlsMu.Unlock()
+		<-ready
+		hlsMu.Lock()
+		st := hlsState[key]
+		hlsMu.Unlock()
+		return st
+	}
+	ready := make(chan struct{})
+	hlsStarting[key] = ready
 	hlsMu.Unlock()
+	defer func() {
+		hlsMu.Lock()
+		if result != nil {
+			hlsState[key] = result
+		}
+		delete(hlsStarting, key)
+		close(ready)
+		hlsMu.Unlock()
+	}()
 
 	// 快速检查房间在线(避免死房间反复起 ffmpeg); 实际回源走本地 19090 续流层。
 	delCacheFor(platform, rid)
@@ -627,15 +658,23 @@ func startFFmpeg(platform, rid string) *hlsProc {
 	cmd.Stderr = errFile
 	cmd.Stdout = nil
 	if err := cmd.Start(); err != nil {
+		if errFile != nil {
+			_ = errFile.Close()
+		}
 		logf("[hls] ffmpeg start fail %s/%s: %v", platform, rid, err)
 		return nil
 	}
-	st := &hlsProc{cmd: cmd, dir: d, last: time.Now(), started: time.Now()}
-	hlsMu.Lock()
-	hlsState[key] = st
-	hlsMu.Unlock()
+	st := &hlsProc{cmd: cmd, dir: d, last: time.Now(), started: time.Now(), done: make(chan struct{})}
+	go func() {
+		_ = cmd.Wait()
+		if errFile != nil {
+			_ = errFile.Close()
+		}
+		close(st.done)
+	}()
 	logf("[hls] start %s pid=%d", key, cmd.Process.Pid)
-	return st
+	result = st
+	return result
 }
 
 func handleHLS(w http.ResponseWriter, r *http.Request, path string) {
@@ -648,6 +687,10 @@ func handleHLS(w http.ResponseWriter, r *http.Request, path string) {
 	platform, rid, fname := parts[1], parts[2], parts[3]
 	if platform != "huya" && platform != "douyu" {
 		http.Error(w, "bad platform", 404)
+		return
+	}
+	if !validHLSFilename(fname) {
+		http.Error(w, "bad hls filename", 404)
 		return
 	}
 	key := platform + "_" + rid
@@ -671,7 +714,7 @@ func handleHLS(w http.ResponseWriter, r *http.Request, path string) {
 		if _, err := os.Stat(fp); err == nil {
 			break
 		}
-		if st.cmd.ProcessState != nil {
+		if hlsProcDone(st) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -683,7 +726,7 @@ func handleHLS(w http.ResponseWriter, r *http.Request, path string) {
 			if segs, _ := filepath.Glob(filepath.Join(st.dir, "seg_*.ts")); len(segs) > 0 {
 				break
 			}
-			if st.cmd.ProcessState != nil {
+			if hlsProcDone(st) {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -703,6 +746,25 @@ func handleHLS(w http.ResponseWriter, r *http.Request, path string) {
 	w.Write(data)
 }
 
+func validHLSFilename(name string) bool {
+	if name == "index.m3u8" {
+		return true
+	}
+	if !strings.HasPrefix(name, "seg_") || !strings.HasSuffix(name, ".ts") {
+		return false
+	}
+	n := strings.TrimSuffix(strings.TrimPrefix(name, "seg_"), ".ts")
+	if n == "" {
+		return false
+	}
+	for _, c := range n {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // hlsWatchdog: 空闲回收(300s) / 进程死或 stale(25s)重启
 func hlsWatchdog(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -717,7 +779,7 @@ func hlsWatchdog(ctx context.Context) {
 			var toRestart []string
 			var toReap []string
 			for key, st := range hlsState {
-				dead := st.cmd.ProcessState != nil
+				dead := hlsProcDone(st)
 				stale := false
 				m3u := filepath.Join(st.dir, "index.m3u8")
 				if fi, err := os.Stat(m3u); err == nil {
@@ -735,7 +797,7 @@ func hlsWatchdog(ctx context.Context) {
 			for _, k := range toReap {
 				if st := hlsState[k]; st != nil {
 					_ = st.cmd.Process.Kill()
-					_, _ = st.cmd.Process.Wait() // 收尸, 防僵尸
+					<-st.done
 					delete(hlsState, k)
 					_ = os.RemoveAll(st.dir)
 					logf("[hls] idle reaped %s", k)
@@ -744,7 +806,7 @@ func hlsWatchdog(ctx context.Context) {
 			for _, k := range toRestart {
 				st := hlsState[k]
 				_ = st.cmd.Process.Kill()
-				_, _ = st.cmd.Process.Wait() // 收尸, 防僵尸
+				<-st.done
 				delete(hlsState, k)
 				parts := strings.SplitN(k, "_", 2)
 				logf("[hls] restart %s (dead/stale)", k)

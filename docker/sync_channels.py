@@ -71,8 +71,9 @@ def build_extinf(game, display, is_huya):
     logo = ("https://huyaimg.msstatic.com/avatar/logo.jpg" if is_huya
             else "https://apic.douyucdn.cn/upload/avatar_v3/logo.jpg")
     game = game or "直播"
+    attrs = {'"': '&quot;'}
     return ('#EXTINF:-1 tvg-logo="%s" group-title="%s", %s'
-            % (logo, _xml_escape(game), _xml_escape(display)))
+            % (logo, _xml_escape(game, attrs), _xml_escape(display)))
 
 def main():
     ap = argparse.ArgumentParser(description="自研虎牙/斗鱼白名单获取器")

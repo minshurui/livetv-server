@@ -7,10 +7,18 @@
 #   - 播放器按 ts 分片拉取, 短暂抖动无感
 #   - 空闲 5 分钟自动回收 ffmpeg 进程
 # ============================================================
-import os, sys, subprocess, threading, time, shutil
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PROXY_PORT", "9090"))
+PORT = int(os.environ.get("PROXY_PORT", "9090"))
+if __name__ == "__main__" and len(sys.argv) > 1:
+    PORT = int(sys.argv[1])
 ALLINONE_BASE = os.environ.get("ALLINONE_BASE", "http://127.0.0.1:35455")
 UPSTREAM_PROXY = os.environ.get("UPSTREAM_PROXY", "")
 IPV6_PLATFORMS = tuple(x.strip() for x in os.environ.get("IPV6_PLATFORMS", "").split(",") if x.strip())
@@ -22,6 +30,29 @@ HLS_WARMUP = float(os.environ.get("HLS_WARMUP", "45"))
 
 hls_lock = threading.Lock()
 hls_state = {}  # key "platform_rid" -> {"proc","dir","last"}
+
+
+def valid_hls_filename(name):
+    if name == "index.m3u8":
+        return True
+    if not (name.startswith("seg_") and name.endswith(".ts")):
+        return False
+    return name[4:-3].isdigit()
+
+
+def stop_process(proc):
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=3)
+    except (subprocess.TimeoutExpired, ChildProcessError):
+        pass
 
 
 def resolve_with_curl(path):
@@ -110,32 +141,16 @@ def hls_watchdog():
                 idle = now - st["last"]
                 d = st["dir"]
             if idle > HLS_IDLE:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except Exception:
-                        pass
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                stop_process(proc)
+                st["err"].close()
                 with hls_lock:
                     hls_state.pop(key, None)
                 shutil.rmtree(d, ignore_errors=True)
                 sys.stderr.write(f"  [hls] idle reaped {key}\n")
             elif dead or stale:
                 platform, rid = key.split("_", 1)
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                stop_process(proc)
+                st["err"].close()
                 with hls_lock:
                     hls_state.pop(key, None)
                 sys.stderr.write(f"  [hls] restart {key} (dead={dead} stale={stale})\n")
@@ -168,6 +183,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "bad hls path")
             return
         platform, rid, fname = parts[1], parts[2], parts[3]
+        if platform not in ("huya", "douyu") or not valid_hls_filename(fname):
+            self.send_error(404, "bad hls target")
+            return
         key = f"{platform}_{rid}"
         st = start_ffmpeg(platform, rid)
         if not st:
@@ -242,20 +260,16 @@ class Handler(BaseHTTPRequestHandler):
         if not first or not looks_like_flv(first):
             err = proc.stderr.read(200).decode(errors="replace")
             sys.stderr.write(f"  bad stream first={first[:8]!r} ({err}), fresh retry\n")
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                pass
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            stop_process(proc)
             real_url2 = resolve_with_curl(path + "?fresh=1")
             if real_url2 and "jsdelivr" not in real_url2 and "testvideo" not in real_url2:
                 proc = open_stream(real_url2)
                 first = proc.stdout.read(4096)
             if not first or not looks_like_flv(first):
-                self.send_error(502, f"stream not FLV: {first[:16]!r} {proc.stderr.read(200).decode(errors='replace')}")
+                err = proc.stderr.read(200).decode(errors="replace")
+                sys.stderr.write(f"  bad stream after retry first={first[:16]!r} ({err})\n")
+                stop_process(proc)
+                self.send_error(502, "stream not FLV")
                 return
 
         self.send_response(200)
@@ -281,14 +295,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"0\r\n\r\n")
             except Exception:
                 pass
-            try:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-                proc.kill()
-            except Exception:
-                pass
+            stop_process(proc)
             sys.stderr.write(f"  -> {path} {total/1024/1024:.1f}MB forwarded\n")
 
 

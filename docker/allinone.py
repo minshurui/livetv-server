@@ -31,6 +31,11 @@ _cache = {}
 _cache_lock = threading.Lock()
 
 
+def url_host(host):
+    host = host.strip().strip("[]")
+    return f"[{host}]" if ":" in host else host
+
+
 def cached(key, ttl):
     def deco(fn):
         def wrapper(*a, **kw):
@@ -104,9 +109,7 @@ def resolve_huya(rid):
         seqid = str(int(time.time() * 1e7))
         wsSecret = hashlib.md5("_".join([fm_pre, u, stream, seqid, wsTime]).encode()).hexdigest()
         # NAS 参数集: 无 fm
-        url = f"{flv_base}/{stream}.flv?wsSecret={wsSecret}&wsTime={wsTime}&u={u}&seqid={seqid}" \
-              f"&txyp={params.get('txyp','')}&fs={params.get('fs','')}" \
-              f"&sphdcdn=&sphdDC=&sphd=&exsphd=&ratio=0"
+        url = f"{flv_base}/{stream}.flv?wsSecret={wsSecret}&wsTime={wsTime}&u={u}&seqid={seqid}"
         return url
     except Exception as e:
         import sys
@@ -262,14 +265,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         输出: #EXTINF 频道列表, URL = http://<本机IP>:PORT/{platform}/{rid}
         斗鱼: 读取 douyu-health.sh 产出的存活白名单(douyu-alive.txt), 只输出可播频道;
               白名单缺失或过期(>3h)则全量输出(保底, 不因过滤缺失而空列表)"""
-        cf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "channels.json")
+        data_root = os.environ.get("DATA", os.path.expanduser("~"))
+        cf = os.path.join(data_root, "lnmp", "allinone", "channels.json")
+        if not os.path.exists(cf):
+            cf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "channels.json")
         try:
             with open(cf) as f:
                 channels = json.load(f)
         except Exception:
             channels = {}
         entries = channels.get(platform, [])
-        host = os.environ.get("PUBLIC_HOST", "127.0.0.1")
+        host = url_host(os.environ.get("PUBLIC_HOST", "127.0.0.1"))
 
         # 斗鱼存活白名单过滤
         alive = None

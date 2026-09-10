@@ -26,7 +26,9 @@ jobs:
       - name: Go unit tests
         run: go test ./...
       - name: Python syntax checks
-        run: python -m py_compile docker/*.py
+        run: |
+          python -m py_compile docker/*.py
+          python -m unittest discover -s tests -v
       - name: Shell syntax checks
         run: |
           sh -n docker/entry.sh

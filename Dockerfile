@@ -19,7 +19,9 @@ COPY src/iptv-api/Pipfile* ./
 RUN if [ -n "$BUILD_PROXY" ]; then \
       export http_proxy=$BUILD_PROXY https_proxy=$BUILD_PROXY HTTP_PROXY=$BUILD_PROXY HTTPS_PROXY=$BUILD_PROXY; \
     fi; \
-    apk add --no-cache gcc musl-dev python3-dev libffi-dev zlib-dev jpeg-dev wget make pcre-dev openssl-dev curl \
+    n=0; until apk add --no-cache gcc musl-dev python3-dev libffi-dev zlib-dev jpeg-dev wget make pcre-dev openssl-dev curl; do \
+      n=$((n + 1)); [ "$n" -ge 3 ] && exit 1; sleep $((n * 5)); \
+    done \
   && pip install --no-cache-dir pipenv \
   && PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy \
   && cd $APP_WORKDIR \
@@ -61,10 +63,12 @@ ENV PYTHONIOENCODING=utf-8
 ENV DATA=/data
 
 # 运行时系统包(最小集 + 可选 ffmpeg; nginx 用 iptv-api 编译版, 见 ENV PATH)
-RUN if [ "$WITH_FFMPEG" = "1" ]; then \
-      apk add --no-cache ffmpeg; \
-    fi \
- && apk add --no-cache pcre curl bash openssh-client \
+RUN runtime_packages="pcre curl bash openssh-client" \
+ && if [ "$WITH_FFMPEG" = "1" ]; then runtime_packages="$runtime_packages ffmpeg"; fi \
+ && n=0 \
+ && until apk add --no-cache $runtime_packages; do \
+      n=$((n + 1)); [ "$n" -ge 3 ] && exit 1; sleep $((n * 5)); \
+    done \
  && mkdir -p /var/log/nginx /run/nginx /etc/nginx/livetv \
  && rm -rf /var/cache/apk/*
 

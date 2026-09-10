@@ -49,6 +49,12 @@ func runHealthCheck(reason string) {
 	logf("[health] === 斗鱼健康检查开始 (%s) ===", reason)
 	ch := loadChannels()
 	entries := ch["douyu"]
+	if len(entries) == 0 {
+		// 首次启动时 channels.json 可能尚未生成。写入“新鲜的空白名单”会让
+		// 随后同步到的全部斗鱼频道持续隐藏，因此此处保留最后一次有效结果。
+		logf("[health] 无斗鱼频道数据, 保留现有白名单")
+		return
+	}
 	rids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if e[0] != "" {

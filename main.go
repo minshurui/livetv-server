@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // 内嵌时区表: Termux 无 tzdata 包时仍按本地时区显示
@@ -23,9 +23,7 @@ func newRand() *rand.Rand {
 }
 
 // ---------------- 35455 handler (对齐 allinone.py do_GET) ----------------
-type aioHandler struct {
-	mu sync.Mutex
-}
+type aioHandler struct{}
 
 // reqHost: 从请求 Host 头提取"外部可达的主机名/IP"(去掉端口)。
 // 换 WiFi 后手机 IP 会变, 若 m3u 还用启动时的 PUBLIC_HOST 快照就会失效;
@@ -40,8 +38,13 @@ func reqHost(r *http.Request) string {
 		h = strings.Trim(h, "[]")
 	}
 	if h == "" || strings.ContainsAny(h, "/\\@ ") {
-		return PUBLIC_HOST
+		return normalizeURLHost(PUBLIC_HOST)
 	}
+	return normalizeURLHost(h)
+}
+
+func normalizeURLHost(h string) string {
+	h = strings.Trim(strings.TrimSpace(h), "[]")
 	// URL 中的 IPv6 字面量必须带方括号；旧实现按第一个冒号切分会把 IPv6 截断。
 	if ip := net.ParseIP(h); ip != nil && ip.To4() == nil {
 		return "[" + h + "]"
@@ -122,6 +125,8 @@ func main() {
 
 	_ = os.MkdirAll(LogDir, 0755)
 	_ = os.MkdirAll(HLSRoot, 0755)
+	_ = os.MkdirAll(AppleCMS, 0755)
+	_ = os.MkdirAll(filepath.Dir(ChannelsF), 0755)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -147,9 +152,9 @@ func main() {
 	}()
 
 	// 35455
-	aioSrv := &http.Server{Addr: "0.0.0.0:" + AIO_PORT, Handler: &aioHandler{}}
+	aioSrv := newHTTPServer(AIO_PORT, &aioHandler{})
 	// 19090
-	prxSrv := &http.Server{Addr: "0.0.0.0:" + PROXY_PORT, Handler: proxyHandler{}}
+	prxSrv := newHTTPServer(PROXY_PORT, proxyHandler{})
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- aioSrv.ListenAndServe() }()
@@ -178,6 +183,16 @@ func main() {
 	case e := <-errCh:
 		logf("服务错误退出: %v", e)
 		cancel()
+	}
+}
+
+func newHTTPServer(port string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              "0.0.0.0:" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 }
 
