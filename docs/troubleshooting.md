@@ -315,14 +315,14 @@ Settings → Environments → minshurui → Environment secrets
 Settings → Secrets and variables → Actions
 ```
 
-名称必须完全一致：
+Secret 名称必须完全一致：
 
 ```text
-DOCKERHUB_USERNAME
+DOCKERHUB_PASSWORD
 DOCKERHUB_TOKEN
 ```
 
-`DOCKERHUB_TOKEN` 是 Docker Hub Access Token，不是 GitHub PAT。
+两项二选一：`DOCKERHUB_PASSWORD` 用于兼容原先成功的账号密码登录；`DOCKERHUB_TOKEN` 是 Docker Hub Access Token，不是 GitHub PAT。两项同时存在时优先使用密码。Docker Hub 用户名默认取 GitHub 仓库 owner；两者不同时，在 Actions Variables 中设置 `DOCKERHUB_USERNAME`，不要把公开用户名放进 Secret。
 
 如果登录步骤成功，但推送时报：
 

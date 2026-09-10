@@ -299,7 +299,7 @@ bash docker/scripts/sync_iptv_from_nas.sh
 发布 job 使用 GitHub Environment `minshurui`，也兼容仓库级 Actions Secrets。所需名称：
 
 ```text
-DOCKERHUB_USERNAME
+DOCKERHUB_PASSWORD
 DOCKERHUB_TOKEN
 ALIYUN_REGISTRY
 ALIYUN_NAMESPACE
@@ -308,4 +308,4 @@ ALIYUN_USERNAME
 ALIYUN_PASSWORD
 ```
 
-Docker Hub 两项必需；`DOCKERHUB_TOKEN` 必须是具备 **Read & Write** 权限的 Docker Hub Access Token。阿里云五项必须全部配置或全部留空。Environment 中的同名 Secret 优先。不要使用 GitHub PAT 代替 Docker Hub 或阿里云令牌。
+`DOCKERHUB_PASSWORD` 与 `DOCKERHUB_TOKEN` 二选一；前者兼容原有的 Docker Hub 账号密码登录，后者是推荐的 Access Token（必须属于目标账号并具备 **Read & Write** 权限）。两项同时存在时优先使用 `DOCKERHUB_PASSWORD`。Docker Hub 用户名默认使用 `github.repository_owner`；如果 Docker Hub ID 与 GitHub owner 不同，在 GitHub Actions **Variables** 中设置公开变量 `DOCKERHUB_USERNAME`。阿里云五项必须全部配置或全部留空。不要使用 GitHub PAT 代替 Docker Hub 或阿里云凭据。

@@ -84,8 +84,11 @@ jobs:
     permissions:
       contents: read
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Docker Hub 命名空间默认与 GitHub 仓库 owner 相同；如不同可设置公开变量
+      # vars.DOCKERHUB_USERNAME。用户名不是密钥，不再从 Secret 读取，避免错配。
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}
+      # 兼容原先使用账号密码的配置；推荐逐步迁移为 Docker Hub Access Token。
+      DOCKERHUB_CREDENTIAL: ${{ secrets.DOCKERHUB_PASSWORD || secrets.DOCKERHUB_TOKEN }}
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
       ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
       ALIYUN_REPO: ${{ secrets.ALIYUN_REPO }}
@@ -95,8 +98,10 @@ jobs:
     # ⚠ 前置配置: GitHub 仓库 → Settings → Environments → minshurui 新增 Secrets。
     # 也可使用同名的 Repository Secrets；Environment 中的同名值优先。
     #   Docker Hub(必配, 缺失时发布 job 会明确失败):
-    #     DOCKERHUB_USERNAME = minshurui
-    #     DOCKERHUB_TOKEN    = Docker Hub Access Token（必须具备 Read & Write）
+    #     DOCKERHUB_PASSWORD = Docker Hub 登录密码（兼容原有配置）
+    #     或 DOCKERHUB_TOKEN = Docker Hub Access Token（推荐，需具备 Read & Write）
+    #   Docker Hub 用户名默认使用 github.repository_owner；命名空间不同时再配置
+    #   Repository variable: DOCKERHUB_USERNAME = <Docker Hub ID>
     #   阿里云容器镜像 ACR(选配; 配了才推阿里云):
     #     ALIYUN_REGISTRY   = registry.cn-hangzhou.aliyuncs.com
     #     ALIYUN_NAMESPACE  = <你的命名空间>
@@ -112,8 +117,8 @@ jobs:
       - name: Validate registry configuration
         shell: bash
         run: |
-          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
-            echo "::error::缺少 DOCKERHUB_USERNAME 或 DOCKERHUB_TOKEN，无法发布 Docker Hub 镜像"
+          if [[ -z "$DOCKERHUB_CREDENTIAL" ]]; then
+            echo "::error::缺少 DOCKERHUB_PASSWORD 或 DOCKERHUB_TOKEN，无法发布 Docker Hub 镜像"
             exit 1
           fi
           aliyun_values=("$ALIYUN_REGISTRY" "$ALIYUN_NAMESPACE" "$ALIYUN_REPO" "$ALIYUN_USERNAME" "$ALIYUN_PASSWORD")
@@ -135,10 +140,10 @@ jobs:
       # ---- 登录 Docker Hub(已配才执行)----
       - name: Login to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_CREDENTIAL != ''
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_CREDENTIAL }}
 
       # ---- 登录阿里云 ACR(已配才执行)----
       - name: Login to Aliyun ACR
@@ -154,15 +159,15 @@ jobs:
 
       - name: Build & push (Docker Hub)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_CREDENTIAL != ''
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone:${{ github.sha }}
+            ${{ env.DOCKERHUB_USERNAME }}/livetv-allinone:latest
+            ${{ env.DOCKERHUB_USERNAME }}/livetv-allinone:${{ github.sha }}
           build-args: |
             VCS_REF=${{ github.sha }}
           cache-from: type=gha
@@ -170,11 +175,11 @@ jobs:
 
       - name: Update Docker Hub description
         uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_CREDENTIAL != ''
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ secrets.DOCKERHUB_USERNAME }}/livetv-allinone
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_CREDENTIAL }}
+          repository: ${{ env.DOCKERHUB_USERNAME }}/livetv-allinone
           readme-filepath: ./dockerhub-description.md
           short-description: 直播源聚合、自愈、录播过滤，支持 amd64/arm64
 
