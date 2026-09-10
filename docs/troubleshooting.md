@@ -179,4 +179,9 @@ curl -v --max-time 15 -o /dev/null '频道URL'
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`（Docker Hub Access Token，不是 GitHub Token）
 
+本仓库的发布任务声明了 GitHub Environment `minshurui`，因此以上凭证既可放在
+`Settings → Environments → minshurui → Environment secrets`，也可放在仓库级
+`Settings → Secrets and variables → Actions`。如果两处存在同名 Secret，Environment
+中的值优先。
+
 公开发送过的 GitHub 或 Docker Hub 令牌必须撤销，不能继续使用。

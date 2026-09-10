@@ -78,6 +78,9 @@ jobs:
     # 审核分支只验证、不推镜像；仅 main 或手动运行允许发布。
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     runs-on: ubuntu-latest
+    # 同时兼容仓库级 Secrets 和既有的 minshurui Environment Secrets。
+    # Environment 中的同名 Secret 优先，凭证不会写入 workflow 或镜像。
+    environment: minshurui
     permissions:
       contents: read
     env:
@@ -89,7 +92,8 @@ jobs:
       ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
       ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
 
-    # ⚠ 前置配置: GitHub 仓库 → Settings → Secrets and variables → Actions 新增:
+    # ⚠ 前置配置: GitHub 仓库 → Settings → Environments → minshurui 新增 Secrets。
+    # 也可使用同名的 Repository Secrets；Environment 中的同名值优先。
     #   Docker Hub(必配, 缺失时发布 job 会明确失败):
     #     DOCKERHUB_USERNAME = minshurui
     #     DOCKERHUB_TOKEN    = Docker Hub Access Token(https://hub.docker.com/settings/security)
