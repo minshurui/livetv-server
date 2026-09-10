@@ -258,17 +258,17 @@ class Handler(BaseHTTPRequestHandler):
         def looks_like_flv(b):
             return len(b) >= 4 and b[:3] == b"FLV"
         if not first or not looks_like_flv(first):
+            stop_process(proc)
             err = proc.stderr.read(200).decode(errors="replace")
             sys.stderr.write(f"  bad stream first={first[:8]!r} ({err}), fresh retry\n")
-            stop_process(proc)
             real_url2 = resolve_with_curl(path + "?fresh=1")
             if real_url2 and "jsdelivr" not in real_url2 and "testvideo" not in real_url2:
                 proc = open_stream(real_url2)
                 first = proc.stdout.read(4096)
             if not first or not looks_like_flv(first):
+                stop_process(proc)
                 err = proc.stderr.read(200).decode(errors="replace")
                 sys.stderr.write(f"  bad stream after retry first={first[:16]!r} ({err})\n")
-                stop_process(proc)
                 self.send_error(502, "stream not FLV")
                 return
 
