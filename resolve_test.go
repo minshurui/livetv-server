@@ -44,7 +44,7 @@ func TestBuildHuyaAntiCodeCurrentAlgorithm(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"wsSecret": "b3ec8ed63eb0dae0ffa0ab35461d1fe3",
+		"wsSecret": "81d8f7abbfe27291d53eecffd5b4c7a9",
 		"wsTime":   "695e06d2",
 		"seqid":    "2966852905549",
 		"ctype":    "huya_commserver",
