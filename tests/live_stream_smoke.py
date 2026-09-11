@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import socket
 import sys
@@ -17,6 +18,14 @@ from pathlib import Path
 
 ROOM_RE = re.compile(r"/stream/huya/(\d+)")
 UA = "Mozilla/5.0 (livetv-server live smoke test)"
+
+
+def percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(quantile * len(ordered)) - 1))
+    return ordered[index]
 
 
 def fetch_room_ids(playlist_url: str, wait_seconds: int, limit: int) -> list[str]:
@@ -69,13 +78,19 @@ def probe_room(
             chunks = 0
             first = bytearray()
             longest_gap = 0.0
+            gaps: list[float] = []
             previous = connected
             deadline = connected + duration
+            # read() 会尽量等满请求长度，把“填充 32 KiB 的耗时”误算成断粮。
+            # read1() 只做一次底层读取，更接近播放器实际收到网络数据的节奏。
+            read_available = getattr(response, "read1", response.read)
 
             while time.monotonic() < deadline:
-                chunk = response.read(32 * 1024)
+                chunk = read_available(4 * 1024)
                 now = time.monotonic()
-                longest_gap = max(longest_gap, now - previous)
+                gap = now - previous
+                gaps.append(gap)
+                longest_gap = max(longest_gap, gap)
                 previous = now
                 if not chunk:
                     raise RuntimeError("代理在测试时间结束前返回 EOF")
@@ -91,6 +106,8 @@ def probe_room(
                     "bytes": total,
                     "chunks": chunks,
                     "average_mbps": round(total * 8 / elapsed / 1_000_000, 3),
+                    "gap_p95_seconds": round(percentile(gaps, 0.95), 3),
+                    "gap_p99_seconds": round(percentile(gaps, 0.99), 3),
                     "longest_gap_seconds": round(longest_gap, 3),
                     "flv_magic": bytes(first).decode("ascii", "replace"),
                 }
@@ -120,7 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--room-id", help="指定虎牙房间；留空时从 M3U 自动选择")
     parser.add_argument("--duration", type=int, default=30, help="每个成功候选的实播秒数")
     parser.add_argument("--min-bytes", type=int, default=1024 * 1024)
-    parser.add_argument("--max-gap", type=float, default=6.0, help="允许的最长无数据秒数")
+    parser.add_argument("--max-gap", type=float, default=0.5, help="允许的最长无数据秒数")
     parser.add_argument("--candidates", type=int, default=5, help="最多尝试的当前直播房间数")
     parser.add_argument("--playlist-wait", type=int, default=180)
     parser.add_argument("--report", default="huya-smoke-report.json")
@@ -173,6 +190,7 @@ def main() -> int:
                     f"FLV={attempt.get('flv_magic')} "
                     f"bytes={attempt.get('bytes')} "
                     f"avg={attempt.get('average_mbps')}Mbps "
+                    f"p99_gap={attempt.get('gap_p99_seconds')}s "
                     f"max_gap={attempt.get('longest_gap_seconds')}s",
                     flush=True,
                 )

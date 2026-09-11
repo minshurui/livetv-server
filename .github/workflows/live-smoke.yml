@@ -77,7 +77,7 @@ jobs:
             --proxy-url http://127.0.0.1:19090
             --duration "$SMOKE_DURATION"
             --min-bytes 1048576
-            --max-gap 6
+            --max-gap 0.5
             --candidates 5
             --playlist-wait 180
             --report smoke-artifacts/huya-smoke-report.json

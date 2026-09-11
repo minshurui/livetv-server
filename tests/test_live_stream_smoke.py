@@ -77,6 +77,8 @@ class LiveStreamSmokeTests(unittest.TestCase):
         self.assertEqual(result["flv_magic"], "FLV")
         self.assertGreaterEqual(result["bytes"], 1024)
         self.assertGreater(result["average_mbps"], 0)
+        self.assertIn("gap_p95_seconds", result)
+        self.assertIn("gap_p99_seconds", result)
 
 
 if __name__ == "__main__":

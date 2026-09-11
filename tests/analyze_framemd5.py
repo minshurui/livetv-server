@@ -81,7 +81,8 @@ def analyze(
         min_loop_cycles,
     )
     problems: list[str] = []
-    freeze_seconds = freeze_frames / fps if fps else 0.0
+    # 一帧本身不代表冻结；从第二个相同采样帧起才形成冻结时长。
+    freeze_seconds = max(0, freeze_frames - 1) / fps if fps else 0.0
     if len(hashes) < min_frames:
         problems.append(f"解码帧不足：{len(hashes)} < {min_frames}")
     if freeze_seconds > max_freeze_seconds:
