@@ -72,7 +72,7 @@ func TestAggregateM3UUsesPublicStreamPorts(t *testing.T) {
 
 	got := aggregateM3U("example.com")
 	for _, want := range []string{
-		"http://example.com:29091/stream/huya/1",
+		"http://example.com:29090/stream/huya/1",
 		"http://example.com:29090/stream/douyu/2",
 	} {
 		if !strings.Contains(got, want) {

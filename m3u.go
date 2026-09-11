@@ -90,8 +90,9 @@ func lineM3U(platform, host string) string {
 		}
 		sb.WriteString(addGroupPrefix(inf, prefix) + "\n")
 		if platform == "huya" {
-			// 虎牙: 走 Python stream-proxy(19091) FLV 直通, 断流1s自行续播(不折腾续流层)
-			sb.WriteString("http://" + host + ":" + PUBLIC_PY_PORT + "/stream/huya/" + rid + "\n")
+			// 默认走 Go 续流层：上游 CDN 断开时保持客户端连接并修正 FLV 时间戳。
+			// 19091 Python 旧代理继续保留，便于已有外部链接回滚。
+			sb.WriteString("http://" + host + ":" + PUBLIC_PROXY_PORT + "/stream/huya/" + rid + "\n")
 		} else {
 			sb.WriteString("http://" + host + ":" + PUBLIC_AIO_PORT + "/" + platform + "/" + rid + "\n")
 		}
@@ -117,15 +118,14 @@ func aggregateM3U(host string) string {
 	sb.WriteString("# livetv 实时聚合 " + nowStr() + " | 斗鱼白名单 " + itoa(n) + " rid (age " + ageStr + ")\n")
 
 	ch := loadChannels()
-	// 虎牙: 全量, 19090 FLV 直通(续流层处理 CDN 限流, 播放器无感知)
+	// 虎牙: 全量, 19090 Go FLV 续流层处理 CDN 断流和时间戳回退。
 	for _, e := range ch["huya"] {
 		rid, inf := e[0], e[1]
 		if rid == "" {
 			continue
 		}
 		sb.WriteString(addGroupPrefix(inf, "虎牙") + "\n")
-		// 虎牙: Python stream-proxy(19091) FLV 直通
-		sb.WriteString("http://" + host + ":" + PUBLIC_PY_PORT + "/stream/huya/" + rid + "\n")
+		sb.WriteString("http://" + host + ":" + PUBLIC_PROXY_PORT + "/stream/huya/" + rid + "\n")
 	}
 	// 斗鱼: 白名单过滤, 19090 转发
 	for _, e := range ch["douyu"] {

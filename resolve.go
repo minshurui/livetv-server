@@ -66,11 +66,12 @@ func httpGetText(u, ua string, timeout int) (string, error) {
 // al > tx > hs > aldirect(最后兜底)。签名参数跨域通用。
 // uid: 2026 新页面用 lPresenterUid(可能13位不截断); 兜底旧 "uid"
 var (
-	huyaLineRe   = regexp.MustCompile(`"sFlvUrl":"([^"]+)","sFlvUrlSuffix":"flv","sFlvAntiCode":"([^"]+)"`)
-	huyaStreamRe = regexp.MustCompile(`"sStreamName":"([^"]+)"`)
-	huyaUidRe    = regexp.MustCompile(`"lPresenterUid":\s*"?(\d+)"?`)
-	huyaUidOldRe = regexp.MustCompile(`"uid":\s*"?(\d{5,12})"?`)
-	huyaLuidRe   = regexp.MustCompile(`"lUid":(\d{5,12})`)
+	huyaLineRe         = regexp.MustCompile(`"sFlvUrl":"([^"]+)","sFlvUrlSuffix":"flv","sFlvAntiCode":"([^"]+)"`)
+	huyaStreamRe       = regexp.MustCompile(`"sStreamName":"([^"]+)"`)
+	huyaUidRe          = regexp.MustCompile(`"lPresenterUid":\s*"?(\d+)"?`)
+	huyaUidOldRe       = regexp.MustCompile(`"uid":\s*"?(\d{5,13})"?`)
+	huyaLuidRe         = regexp.MustCompile(`"lUid":\s*"?(\d{5,13})"?`)
+	huyaStreamMarkerRe = regexp.MustCompile(`\bstream\s*:\s*`)
 )
 
 func huyaPref(u string) int {
@@ -90,8 +91,225 @@ func huyaPref(u string) int {
 }
 
 type huyaLine struct {
-	base string
-	anti string
+	base     string
+	anti     string
+	stream   string
+	cdn      string
+	uid      uint64
+	priority int
+}
+
+type huyaStreamInfo struct {
+	FlvURL       string          `json:"sFlvUrl"`
+	FlvAntiCode  string          `json:"sFlvAntiCode"`
+	StreamName   string          `json:"sStreamName"`
+	CDN          string          `json:"sCdnType"`
+	PresenterUID json.RawMessage `json:"lPresenterUid"`
+	Priority     int             `json:"iWebPriorityRate"`
+	WebPriority  int             `json:"iWebPriority"`
+	MobileUID    json.RawMessage `json:"lUid"`
+	ExtraUID     json.RawMessage `json:"uid"`
+}
+
+type huyaStreamPayload struct {
+	Data []struct {
+		GameStreamInfoList []huyaStreamInfo `json:"gameStreamInfoList"`
+	} `json:"data"`
+}
+
+func rawUint64(raw json.RawMessage) uint64 {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return v
+}
+
+// findJSONValueEnd 找到从 start 开始的完整 JSON object/array，正确跳过字符串内括号。
+func findJSONValueEnd(input string, start int) int {
+	for start < len(input) && (input[start] == ' ' || input[start] == '\t' || input[start] == '\r' || input[start] == '\n') {
+		start++
+	}
+	if start >= len(input) || (input[start] != '{' && input[start] != '[') {
+		return -1
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(input); i++ {
+		c := input[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+func unescapeJSONFragment(s string) string {
+	if v, err := strconv.Unquote(`"` + s + `"`); err == nil {
+		return v
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(s, `\/`, `/`), `\u0026`, `&`)
+}
+
+func extractHuyaLines(page string) []huyaLine {
+	var lines []huyaLine
+	if marker := huyaStreamMarkerRe.FindStringIndex(page); marker != nil {
+		start := marker[1]
+		if end := findJSONValueEnd(page, start); end > start {
+			var payload huyaStreamPayload
+			if err := json.Unmarshal([]byte(page[start:end]), &payload); err == nil {
+				for _, data := range payload.Data {
+					for _, info := range data.GameStreamInfoList {
+						if info.FlvURL == "" || info.FlvAntiCode == "" || info.StreamName == "" {
+							continue
+						}
+						uid := rawUint64(info.PresenterUID)
+						if uid == 0 {
+							uid = rawUint64(info.MobileUID)
+						}
+						if uid == 0 {
+							uid = rawUint64(info.ExtraUID)
+						}
+						priority := info.Priority
+						if priority == 0 {
+							priority = info.WebPriority
+						}
+						lines = append(lines, huyaLine{
+							base: info.FlvURL, anti: info.FlvAntiCode, stream: info.StreamName,
+							cdn: info.CDN, uid: uid, priority: priority,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	if len(lines) > 0 {
+		return lines
+	}
+
+	// 兼容旧页面：结构化 stream payload 不存在时再使用原来的相邻字段正则。
+	ms := huyaLineRe.FindAllStringSubmatch(page, -1)
+	stream := ""
+	if sm := huyaStreamRe.FindStringSubmatch(page); len(sm) > 1 {
+		stream = unescapeJSONFragment(sm[1])
+	}
+	uid := uint64(0)
+	for _, re := range []*regexp.Regexp{huyaUidRe, huyaUidOldRe, huyaLuidRe} {
+		if m := re.FindStringSubmatch(page); len(m) > 1 {
+			uid, _ = strconv.ParseUint(m[1], 10, 64)
+			break
+		}
+	}
+	for _, m := range ms {
+		lines = append(lines, huyaLine{
+			base: unescapeJSONFragment(m[1]), anti: unescapeJSONFragment(m[2]),
+			stream: stream, uid: uid,
+		})
+	}
+	return lines
+}
+
+func rotateHuyaUID(uid uint64) uint64 {
+	low := uid & 0xFFFFFFFF
+	return ((((low << 8) | (low >> 24)) & 0xFFFFFFFF) | (uid & ^uint64(0xFFFFFFFF)))
+}
+
+func decodeHuyaFM(fm string) (string, error) {
+	fm = strings.ReplaceAll(fm, " ", "+")
+	raw, err := base64.StdEncoding.DecodeString(fm)
+	if err != nil {
+		raw, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(fm, "="))
+	}
+	if err != nil {
+		return "", err
+	}
+	prefix := string(raw)
+	if i := strings.Index(prefix, "_"); i >= 0 {
+		prefix = prefix[:i]
+	}
+	return prefix, nil
+}
+
+func buildHuyaAntiCode(stream, anti string, presenterUID uint64, now time.Time) (string, error) {
+	anti = strings.ReplaceAll(anti, "&amp;", "&")
+	query, err := url.ParseQuery(anti)
+	if err != nil {
+		return "", err
+	}
+	fm := query.Get("fm")
+	wsTime := query.Get("wsTime")
+	if fm == "" || wsTime == "" {
+		return "", fmt.Errorf("missing fm/wsTime")
+	}
+	prefix, err := decodeHuyaFM(fm)
+	if err != nil {
+		return "", err
+	}
+	if presenterUID == 0 {
+		presenterUID = 1400000000000 + uint64(now.UnixNano()%10000000)
+	}
+	ctype := query.Get("ctype")
+	if ctype == "" {
+		ctype = "huya_live"
+	}
+	platformID := query.Get("t")
+	if platformID == "" {
+		platformID = "100"
+	}
+	fs := query.Get("fs")
+	if fs == "" {
+		fs = "bgct"
+	}
+	if expiry, parseErr := strconv.ParseInt(wsTime, 16, 64); parseErr == nil && expiry < now.Unix()+20*60 {
+		wsTime = strconv.FormatInt(now.Unix()+24*60*60, 16)
+	}
+
+	seqID := presenterUID + uint64(now.UnixMilli())
+	secretHash := md5hex(fmt.Sprintf("%d|%s|%s", seqID, ctype, platformID))
+	isWAP := platformID == "103"
+	calcUID := rotateHuyaUID(presenterUID)
+	if isWAP {
+		calcUID = presenterUID
+	}
+	wsSecret := md5hex(fmt.Sprintf("%s_%d_%s_%s_%s", prefix, calcUID, stream, secretHash, wsTime))
+
+	result := url.Values{}
+	result.Set("wsSecret", wsSecret)
+	result.Set("wsTime", wsTime)
+	result.Set("seqid", strconv.FormatUint(seqID, 10))
+	result.Set("ctype", ctype)
+	result.Set("ver", "1")
+	result.Set("fs", fs)
+	result.Set("fm", fm)
+	result.Set("t", platformID)
+	if HUYA_CODEC != "" {
+		result.Set("codec", HUYA_CODEC)
+	}
+	if isWAP {
+		result.Set("uid", strconv.FormatUint(presenterUID, 10))
+		result.Set("uuid", strconv.FormatUint(uint64(now.UnixMilli())%uint64(^uint32(0)), 10))
+	} else {
+		result.Set("u", strconv.FormatUint(calcUID, 10))
+	}
+	return result.Encode(), nil
 }
 
 func resolveHuya(rid string) string {
@@ -101,73 +319,44 @@ func resolveHuya(rid string) string {
 	}
 	page, err := httpGetText("https://www.huya.com/"+rid, UA_PC, TIMEOUT_S)
 	if err != nil {
+		logf("[huya %s] room page: %v", rid, err)
 		huyaCache.set(key, "", 60)
 		return ""
 	}
-	ms := huyaLineRe.FindAllStringSubmatch(page, -1)
-	if len(ms) == 0 {
+	lines := extractHuyaLines(page)
+	if len(lines) == 0 {
+		logf("[huya %s] no FLV stream in page", rid)
 		huyaCache.set(key, "", 60)
 		return ""
-	}
-	lines := make([]huyaLine, 0, len(ms))
-	for _, m := range ms {
-		lines = append(lines, huyaLine{base: m[1], anti: m[2]})
 	}
 	sort.SliceStable(lines, func(i, j int) bool {
-		return huyaPref(lines[i].base) < huyaPref(lines[j].base)
-	})
-	flvBase, anti := lines[0].base, lines[0].anti
-
-	sm := huyaStreamRe.FindStringSubmatch(page)
-	if len(sm) < 2 {
-		huyaCache.set(key, "", 60)
-		return ""
-	}
-	stream := sm[1]
-
-	antiDec := strings.ReplaceAll(anti, `\"`, `"`)
-	params := map[string]string{}
-	for _, p := range strings.Split(antiDec, "&") {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) == 2 {
-			params[kv[0]] = kv[1]
+		iPreferred := HUYA_CDN != "" && strings.EqualFold(lines[i].cdn, HUYA_CDN)
+		jPreferred := HUYA_CDN != "" && strings.EqualFold(lines[j].cdn, HUYA_CDN)
+		if iPreferred != jPreferred {
+			return iPreferred
 		}
+		pi, pj := huyaPref(lines[i].base), huyaPref(lines[j].base)
+		if pi != pj {
+			return pi < pj
+		}
+		return lines[i].priority > lines[j].priority
+	})
+	for _, line := range lines {
+		if line.stream == "" {
+			continue
+		}
+		anti, buildErr := buildHuyaAntiCode(line.stream, line.anti, line.uid, time.Now())
+		if buildErr != nil {
+			logf("[huya %s] build %s token: %v", rid, line.cdn, buildErr)
+			continue
+		}
+		base := strings.Replace(line.base, "http://", "https://", 1)
+		full := fmt.Sprintf("%s/%s.flv?%s", strings.TrimRight(base, "/"), line.stream, anti)
+		huyaCache.set(key, full, 60)
+		return full
 	}
-	wsTime := params["wsTime"]
-	fmDec, _ := url.QueryUnescape(params["fm"])
-	raw, err := base64.StdEncoding.DecodeString(fmDec + "==")
-	if err != nil {
-		raw = []byte(fmDec)
-	}
-	fmPre := ""
-	if i := strings.Index(string(raw), "_"); i >= 0 {
-		fmPre = string(raw)[:i]
-	} else {
-		fmPre = string(raw)
-	}
-
-	// 主播 uid (lPresenterUid 优先)
-	u := ""
-	if m := huyaUidRe.FindStringSubmatch(page); len(m) > 1 {
-		u = m[1]
-	} else if m := huyaUidOldRe.FindStringSubmatch(page); len(m) > 1 {
-		u = m[1]
-	} else if m := huyaLuidRe.FindStringSubmatch(page); len(m) > 1 {
-		u = m[1]
-	}
-	if u == "" {
-		u = "0"
-	}
-	seqid := strconv.FormatInt(time.Now().UnixNano()/100, 10) // 约 now*1e7
-	wsSecret := md5hex(strings.Join([]string{fmPre, u, stream, seqid, wsTime}, "_"))
-
-	// 关键: URL 不带 fm 参数(带 fm 会被 CDN 限流断开) — 与 Python allinone.py 完全一致。
-	// 2026-09-03: 之前 Go 版多带了 txyp/fs/sphdcdn 等参数 → 每条连接 ~1.7MB 必断。
-	// Python 版只有 wsSecret&wsTime&u&seqid 4 个参数, 连接持续不断。
-	full := fmt.Sprintf("%s/%s.flv?wsSecret=%s&wsTime=%s&u=%s&seqid=%s",
-		flvBase, stream, wsSecret, wsTime, u, seqid)
-	huyaCache.set(key, full, 60)
-	return full
+	huyaCache.set(key, "", 60)
+	return ""
 }
 
 // ---------------- 斗鱼 ----------------
