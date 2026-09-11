@@ -102,7 +102,7 @@ python3 tests/live_stream_smoke.py \
   --duration 30
 ```
 
-脚本会从当前直播列表选择房间，并输出 FLV 首帧、接收字节数、平均码率和最长数据间隔。仓库 Actions 页也提供 `Live Playback Smoke Test` 手动实播任务。
+脚本会从当前直播列表选择房间，并输出 FLV 首帧、接收字节数、平均码率和最长数据间隔。仓库 Actions 页还提供 `Live Playback Smoke Test`：除流量测试外，会使用 FFmpeg 真实解码 60 秒并检查冻结帧和循环画面。
 
 正确结果应满足：
 

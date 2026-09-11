@@ -87,6 +87,40 @@ jobs:
           fi
           python3 tests/live_stream_smoke.py "${args[@]}"
 
+      - name: Decode video and detect frozen or repeated frames
+        shell: bash
+        run: |
+          mkdir -p smoke-artifacts
+          room_id=$(python3 -c 'import json; print(json.load(open("smoke-artifacts/huya-smoke-report.json"))["selected_room_id"])')
+          stream_url="http://127.0.0.1:19090/stream/huya/${room_id}?fresh=1"
+          set +e
+          timeout --signal=INT --kill-after=10s 90s \
+            docker exec livetv-smoke ffmpeg \
+              -hide_banner -nostdin -loglevel warning -xerror \
+              -rw_timeout 10000000 \
+              -i "$stream_url" \
+              -t 60 -map 0:v:0 -an \
+              -vf 'scale=320:-2,fps=2' \
+              -f framemd5 - \
+              > smoke-artifacts/huya-frames.md5 \
+              2> smoke-artifacts/huya-ffmpeg.log
+          ffmpeg_rc=$?
+          set -e
+          if [[ "$ffmpeg_rc" -ne 0 ]]; then
+            echo "::error::FFmpeg 实际解码失败，退出码 $ffmpeg_rc"
+            tail -n 100 smoke-artifacts/huya-ffmpeg.log
+            exit 1
+          fi
+          python3 tests/analyze_framemd5.py \
+            --input smoke-artifacts/huya-frames.md5 \
+            --report smoke-artifacts/huya-frame-report.json \
+            --fps 2 \
+            --min-frames 60 \
+            --max-freeze-seconds 8 \
+            --max-loop-period-seconds 10 \
+            --min-loop-cycles 3 \
+            --min-loop-span-seconds 12
+
       - name: Collect diagnostics
         if: always()
         run: |
