@@ -38,6 +38,9 @@ HOST_PROXY_PORT=19090
 HOST_RES_PORT=35456
 HOST_PY_PORT=19091
 
+HUYA_CDN=AL
+HUYA_CODEC=264
+
 IPTV_MIN_CHANNELS=20
 IPTV_REJECT_VOD=1
 IPTV_BLOCKLIST=
@@ -71,7 +74,7 @@ HOST_RES_PORT=25456
 HOST_PY_PORT=29091
 ```
 
-仓库 Compose 会自动把 `HOST_AIO_PORT`、`HOST_PROXY_PORT`、`HOST_PY_PORT` 写入对应 `PUBLIC_*`，最终 M3U 不会仍指向旧端口。
+仓库 Compose 会自动把 `HOST_AIO_PORT`、`HOST_PROXY_PORT`、`HOST_PY_PORT` 写入对应 `PUBLIC_*`。新生成的虎牙和斗鱼 URL 都使用 `PUBLIC_PROXY_PORT`；`PUBLIC_PY_PORT` 只兼容旧链接。
 
 使用自己写的 Compose 时必须显式配置：
 
@@ -130,8 +133,8 @@ SYNC_MIN_DOUYU=50
 | 变量 | 默认值 | 需要播放器访问 | 用途 |
 |---|---:|---|---|
 | `HOST_LIVETV_PORT` | `8081` | 是 | 最终 M3U 和 `/healthz` |
-| `HOST_PROXY_PORT` | `19090` | 使用斗鱼时是 | 斗鱼 FLV/HLS 代理 |
-| `HOST_PY_PORT` | `19091` | 使用虎牙时是 | 虎牙流代理 |
+| `HOST_PROXY_PORT` | `19090` | 使用虎牙/斗鱼时是 | Go FLV/HLS 续流代理 |
+| `HOST_PY_PORT` | `19091` | 否 | 旧版虎牙 Python 代理兼容 |
 | `HOST_IPTV_UI_PORT` | `8080` | 否 | `iptv-api` 管理页 |
 | `HOST_AIO_PORT` | `35455` | 通常否 | Go 单平台 M3U/解析兼容入口 |
 | `HOST_RES_PORT` | `35456` | 通常否 | Python 旧兼容入口 |
@@ -149,17 +152,26 @@ SYNC_MIN_DOUYU=50
 | `APP_PORT` | `5180` | `iptv-api` Flask/Gunicorn，仅容器内部使用 |
 | `NGINX_RTMP_PORT` | `1935` | `iptv-api` 内部 RTMP |
 | `AIO_PORT` | `35455` | Go M3U/解析服务 |
-| `PROXY_PORT` | `19090` | Go 斗鱼代理 |
+| `PROXY_PORT` | `19090` | Go 虎牙/斗鱼代理 |
 | `RES_PORT` | `35456` | Python 旧解析服务 |
-| `PY_PORT` | `19091` | Python 虎牙代理 |
+| `PY_PORT` | `19091` | Python 旧版虎牙兼容代理 |
 
 下面三个值决定 M3U 里真正写入的端口：
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `PUBLIC_AIO_PORT` | 跟随 `AIO_PORT` | 单平台解析地址 |
-| `PUBLIC_PROXY_PORT` | 跟随 `PROXY_PORT` | 斗鱼频道地址 |
-| `PUBLIC_PY_PORT` | 跟随 `PY_PORT` | 虎牙频道地址 |
+| `PUBLIC_PROXY_PORT` | 跟随 `PROXY_PORT` | 新版虎牙和斗鱼频道地址 |
+| `PUBLIC_PY_PORT` | 跟随 `PY_PORT` | 旧版虎牙频道兼容地址 |
+
+## 虎牙播放参数
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `HUYA_CDN` | `AL` | 首选虎牙 CDN 类型；常见可选值有 `AL`、`TX`、`HS` |
+| `HUYA_CODEC` | `264` | 默认强制 H.264，兼容电视、PotPlayer 和多数 IPTV 客户端 |
+
+只有日志反复显示首选 CDN 403 或无法建立连接时才尝试修改 `HUYA_CDN`。修改后重建容器，并重新加载 M3U；不要把已经过期的真实 CDN URL 固定到配置里。
 
 “列表能下载但全部平台频道连不上”，首先检查公开端口是否与宿主映射一致。
 

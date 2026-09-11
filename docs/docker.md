@@ -14,8 +14,8 @@
 
 M3U 中的虎牙和斗鱼不是固定 CDN 地址，而是本机代理地址。播放器播放频道时还会连接：
 
-- `19090`：斗鱼流代理；
-- `19091`：虎牙流代理。
+- `19090`：虎牙/斗鱼 Go 续流代理；
+- `19091`：旧版虎牙直通兼容，新部署不是必需。
 
 因此只开放 `8081` 会出现“列表能下载、直播却打不开”。
 
@@ -73,12 +73,14 @@ services:
     init: true
     ports:
       - "8081:8081"   # 最终播放列表
-      - "19090:19090" # 斗鱼直播流
-      - "19091:19091" # 虎牙直播流
+      - "19090:19090" # 虎牙/斗鱼直播流
+      - "19091:19091" # 可选：旧版虎牙链接兼容
       - "8080:8080"   # IPTV 页面；不需要可删除
     environment:
       TZ: Asia/Shanghai
       PUBLIC_HOST: ""
+      HUYA_CDN: AL
+      HUYA_CODEC: "264"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -180,10 +182,9 @@ curl -fsS http://服务器局域网IP:8081/allinone.m3u | grep -m 3 '^http'
 
 ```bash
 curl -I --max-time 5 http://服务器局域网IP:19090/
-curl -I --max-time 5 http://服务器局域网IP:19091/
 ```
 
-即使根路径返回 404，只要不是连接超时或拒绝，就说明端口已到达服务。真正播放仍需使用 M3U 中的完整频道路径。
+即使根路径返回 404，只要不是连接超时或拒绝，就说明端口已到达服务。真正播放仍需使用 M3U 中的完整频道路径。只有验证旧版虎牙链接时才额外测试 19091。
 
 ### 5. IPTV 原始结果和最终快照
 
@@ -254,7 +255,7 @@ docker compose up -d
 7. 浏览器打开 `http://群晖IP:8081/healthz`。
 8. 播放器添加 `http://群晖IP:8081/allinone.m3u`。
 
-群晖防火墙启用时，至少允许播放器所在局域网访问 TCP `8081`、`19090`、`19091`。`8080` 只允许管理设备访问。
+群晖防火墙启用时，至少允许播放器所在局域网访问 TCP `8081`、`19090`。只有旧版虎牙链接才需要 `19091`；`8080` 只允许管理设备访问。
 
 ## 方案 C：OpenWrt / iStoreOS
 
@@ -284,12 +285,10 @@ nano compose.yml
 ports:
   - "8201:8081"
   - "29090:19090"
-  - "29091:19091"
   - "8200:8080"
 environment:
   PUBLIC_HOST: ""
   PUBLIC_PROXY_PORT: "29090"
-  PUBLIC_PY_PORT: "29091"
 ```
 
 此时播放地址是：
@@ -345,17 +344,14 @@ HOST_LIVETV_PORT=8201
 ```yaml
 ports:
   - "29090:19090"
-  - "29091:19091"
 environment:
   PUBLIC_PROXY_PORT: "29090"
-  PUBLIC_PY_PORT: "29091"
 ```
 
 仓库 `.env` 只需：
 
 ```dotenv
 HOST_PROXY_PORT=29090
-HOST_PY_PORT=29091
 ```
 
 仓库 Compose 会自动把 `HOST_*` 传给 `PUBLIC_*`。
@@ -398,7 +394,7 @@ http://[你的IPv6地址]:8081/allinone.m3u
 - 优先使用 WireGuard、Tailscale 等 VPN；
 - 或使用带认证的反向代理保护 `8081`；
 - 不要公开 `8080` 管理页；
-- `19090`、`19091` 是播放器直连的流端口，无法只反代 M3U 就自动保护。
+- `19090` 是播放器直连的新版流端口，无法只反代 M3U 就自动保护；`19091` 仅用于旧虎牙链接。
 
 ## 首次启动要等多久
 
@@ -522,7 +518,7 @@ git clone https://github.com/minshurui/livetv-server.git
 cd livetv-server
 docker build -t livetv-allinone:test .
 docker run -d --name livetv-test \
-  -p 8081:8081 -p 19090:19090 -p 19091:19091 \
+  -p 8081:8081 -p 19090:19090 \
   -v "$PWD/test-data:/data" \
   livetv-allinone:test
 ```

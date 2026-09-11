@@ -1,6 +1,6 @@
 # Android Termux 部署手册
 
-Termux 适合把闲置 Android 手机变成局域网直播服务。它运行 Go 聚合/斗鱼代理和 Python 虎牙代理，但不包含 Docker 镜像里的完整 `iptv-api` 电视源测速栈。
+Termux 适合把闲置 Android 手机变成局域网直播服务。它运行 Go 聚合及虎牙/斗鱼代理，并保留 Python 虎牙兼容代理，但不包含 Docker 镜像里的完整 `iptv-api` 电视源测速栈。
 
 如果你需要自动收集、测速和更新大量 IPTV，建议把完整版部署在 NAS；Termux 可以只提供虎牙/斗鱼，或从 NAS 同步已经生成的 IPTV 快照。
 
@@ -12,7 +12,7 @@ Termux 适合把闲置 Android 手机变成局域网直播服务。它运行 Go 
 http://手机局域网IP:35455/allinone.m3u
 ```
 
-Termux 没有 Docker 中的 8081 聚合 nginx，所以入口是 35455。虎牙和斗鱼还会使用 19091、19090。
+Termux 没有 Docker 中的 8081 聚合 nginx，所以入口是 35455。新生成的虎牙和斗鱼地址都使用 19090；19091 仅兼容旧版虎牙链接。
 
 ## 第一步：安装正确版本
 
@@ -65,7 +65,7 @@ DATA="$HOME" bash switch.sh status
 脚本会：
 
 1. 创建 `$HOME/lnmp/` 数据目录；
-2. 启动 Go 服务和虎牙 Python 代理；
+2. 启动 Go 服务和虎牙 Python 兼容代理；
 3. 同步一次虎牙/斗鱼当前开播目录；
 4. 把 PID 和日志保存到 `$HOME/lnmp/`。
 
@@ -225,7 +225,7 @@ DATA="$HOME" bash switch.sh start
 - 地址必须使用手机 WLAN IP；
 - Android 不能暂停 Termux；
 - 路由器访客网络可能禁止设备互访；
-- 19090、19091 也必须可达，否则列表能打开但平台频道无法播放。
+- 19090 必须可达，否则列表能打开但虎牙/斗鱼频道无法播放；只有旧版虎牙链接才需要 19091。
 
 ### 服务过一会儿消失
 

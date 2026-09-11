@@ -22,7 +22,7 @@ curl -v --max-time 10 http://127.0.0.1:8081/allinone.m3u
 | 容器反复重启 | 主进程初始化失败 | 看 `docker logs livetv` |
 | `healthz` 连接拒绝 | 8081 没监听或映射错误 | 检查端口和健康状态 |
 | `healthz=ok`，M3U 只有头 | 服务正常，频道数据尚未生成 | 检查同步/桥接日志 |
-| M3U 有频道，本机可播，电视不可播 | 网络、防火墙或公开端口错误 | 检查 8081/19090/19091 |
+| M3U 有频道，本机可播，电视不可播 | 网络、防火墙或公开端口错误 | 检查 8081/19090；19091 仅用于旧虎牙链接 |
 | 只有某个平台失败 | 该平台解析或上游网络问题 | 看平台对应日志 |
 
 ## 症状索引
@@ -95,7 +95,7 @@ HOST_PY_PORT=29091
 docker compose -f docker/docker-compose.yml up -d --force-recreate
 ```
 
-此时播放地址是 `http://服务器:8201/allinone.m3u`。仓库 Compose 会同步流代理公开端口；自定义 Compose 还要设置 `PUBLIC_PROXY_PORT` 和 `PUBLIC_PY_PORT`。
+此时播放地址是 `http://服务器:8201/allinone.m3u`。仓库 Compose 会同步流代理公开端口；自定义 Compose 必须设置 `PUBLIC_PROXY_PORT`。`PUBLIC_PY_PORT` 只影响旧版虎牙链接。
 
 ## 容器一直 `starting` 或 `unhealthy`
 
@@ -219,20 +219,38 @@ curl -v --max-time 15 -o /dev/null '频道URL'
 |---|---|
 | `404 offline (room not live)` | 房间已下播或当前无法解析；不会再跳测试录像 |
 | `502 stream not FLV` | 上游返回网页、错误体或非 FLV 内容 |
-| 连接 19090/19091 超时 | 播放器到代理端口不通 |
+| 连接 19090 超时 | 播放器到新版虎牙/斗鱼代理端口不通 |
+| 连接 19091 超时 | 只影响旧版虎牙直通链接 |
 | 建立连接后很快断开 | CDN 限流、签名变化或上游网络问题 |
 
 平台对应日志：
 
 ```bash
-# 斗鱼/Go
+# 虎牙/斗鱼 Go 续流层
 docker exec livetv tail -n 150 /data/lnmp/logs/livetv.log
 
-# 虎牙/Python
+# 仅旧版 19091 虎牙链接
 docker exec livetv tail -n 150 /data/lnmp/logs/huya-proxy.log
 ```
 
 IPTV 直链不经过 19090/19091。只有 IPTV 失败时，应直接测试该上游 URL 和服务器网络。
+
+### 虎牙 403、播几秒断流或反复卡顿
+
+新版本默认让虎牙走 `19090` Go 续流层，并使用当前签名参数生成 H.264 FLV。先确认 M3U 中虎牙地址形如：
+
+```text
+http://服务器:19090/stream/huya/房间号
+```
+
+如果仍是 `19091`，说明播放器缓存了旧 M3U；删除旧订阅后重新添加。继续失败时查看：
+
+```bash
+docker exec livetv tail -n 150 /data/lnmp/logs/livetv.log
+docker logs --tail=150 livetv
+```
+
+默认首选 `HUYA_CDN=AL`。只有日志持续出现该线路 403/连接失败时，才在 Compose 中依次尝试 `HUYA_CDN=TX` 或 `HUYA_CDN=HS`，重建容器并重新加载列表。`HUYA_CODEC=264` 建议保持不变，避免电视端不支持 HEVC FLV。
 
 ## M3U 里的 IP、域名或端口错误
 

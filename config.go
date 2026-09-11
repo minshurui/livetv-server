@@ -29,7 +29,7 @@ var (
 	AIO_PORT    = envOr("AIO_PORT", "35455")
 	PROXY_PORT  = envOr("PROXY_PORT", "19090")
 	PY_PORT     = envOr("PY_PORT", "19091") // 虎牙: Python stream-proxy (FLV 直通)
-	HUYA_CDN    = envOr("HUYA_CDN", "AL")    // 首选 CDN；不可用时仍按内置顺序回退
+	HUYA_CDN    = envOr("HUYA_CDN", "AL")    // 首选 CDN；为空时使用内置稳定性顺序
 	HUYA_CODEC  = envOr("HUYA_CODEC", "264") // 强制 H.264，兼容更多电视和旧播放器
 	// 宿主机映射端口可与容器内部端口不同；播放列表必须写外部端口。
 	PUBLIC_AIO_PORT   = envOr("PUBLIC_AIO_PORT", AIO_PORT)

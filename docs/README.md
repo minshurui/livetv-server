@@ -14,10 +14,10 @@
 
 | 设备 | 推荐方案 | 需要的端口 | 从这里开始 |
 |---|---|---|---|
-| Debian / Ubuntu / 普通 Linux | Docker Compose | 8081、19090、19091；8080 可选 | [普通 Linux](docker.md#方案-a普通-linux一键部署) |
-| 群晖 DSM 7 | Container Manager 项目 | 8081、19090、19091；8080 可选 | [群晖](docker.md#方案-b群晖-container-manager) |
+| Debian / Ubuntu / 普通 Linux | Docker Compose | 8081、19090；8080 可选，19091 仅兼容旧链接 | [普通 Linux](docker.md#方案-a普通-linux一键部署) |
+| 群晖 DSM 7 | Container Manager 项目 | 8081、19090；8080 可选，19091 仅兼容旧链接 | [群晖](docker.md#方案-b群晖-container-manager) |
 | OpenWrt / iStoreOS | 外接磁盘上的 Docker Compose | 建议先改掉冲突端口 | [OpenWrt](docker.md#方案-copenwrt--istoreos) |
-| Android | Termux 精简模式 | 35455、19090、19091 | [Termux](termux.md) |
+| Android | Termux 精简模式 | 35455、19090；19091 仅兼容旧链接 | [Termux](termux.md) |
 
 ## 按问题选择
 
@@ -40,7 +40,7 @@
 - `http://服务器:8081/healthz` 返回 `ok`；
 - `allinone.m3u` 第一行是 `#EXTM3U`；
 - 容器状态最终为 `healthy`；
-- 播放器所在设备能访问 8081、19090、19091；
+- 播放器所在设备能访问 8081、19090；
 - 重建容器后 `data/` 中配置和最后可用列表仍存在；
 - 离线房间返回 404，而不是播放测试录像；
 - 新 IPTV 结果异常时不会覆盖 last-good 快照。

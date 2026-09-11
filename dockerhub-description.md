@@ -1,6 +1,6 @@
 # livetv-allinone
 
-将虎牙、斗鱼当前开播房间和经过检测的 IPTV 电视源聚合为一个 M3U。镜像支持 `linux/amd64`、`linux/arm64`，包含 Go 服务、Python 虎牙代理、`iptv-api`、FFmpeg 和 nginx，宿主机不需要安装 Go、Python 或 FFmpeg。
+将虎牙、斗鱼当前开播房间和经过检测的 IPTV 电视源聚合为一个 M3U。镜像支持 `linux/amd64`、`linux/arm64`，包含 Go 续流服务、Python 兼容代理、`iptv-api`、FFmpeg 和 nginx，宿主机不需要安装 Go、Python 或 FFmpeg。
 
 - 源码：<https://github.com/minshurui/livetv-server>
 - 完整部署白皮书：<https://github.com/minshurui/livetv-server/blob/main/docs/docker.md>
@@ -13,7 +13,7 @@
 http://服务器IP或域名:8081/allinone.m3u
 ```
 
-注意：M3U 里的斗鱼和虎牙频道还会连接 `19090`、`19091`。只映射 8081 会导致“列表能下载但平台频道无法播放”。
+注意：M3U 里的斗鱼和虎牙频道还会连接 `19090`。只映射 8081 会导致“列表能下载但平台频道无法播放”。`19091` 仅供旧版虎牙链接兼容。
 
 ## 直接部署
 
@@ -28,12 +28,14 @@ services:
     init: true
     ports:
       - "8081:8081"   # 最终 M3U
-      - "19090:19090" # 斗鱼流代理
-      - "19091:19091" # 虎牙流代理
+      - "19090:19090" # 虎牙/斗鱼 Go 续流代理
+      - "19091:19091" # 可选：旧版虎牙兼容端口
       - "8080:8080"   # 可选：IPTV 管理页
     environment:
       TZ: Asia/Shanghai
       PUBLIC_HOST: ""
+      HUYA_CDN: AL
+      HUYA_CODEC: "264"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -80,7 +82,7 @@ docker inspect --format '{{.State.Health.Status}}' livetv
 http://群晖IP:8081/allinone.m3u
 ```
 
-群晖防火墙至少允许播放器所在局域网访问 TCP 8081、19090、19091。8080 仅建议管理设备在内网访问。
+群晖防火墙至少允许播放器所在局域网访问 TCP 8081、19090。使用旧版虎牙链接时才需要 19091；8080 仅建议管理设备在内网访问。
 
 ## 端口冲突
 
@@ -98,10 +100,8 @@ ports:
 ```yaml
 ports:
   - "29090:19090"
-  - "29091:19091"
 environment:
   PUBLIC_PROXY_PORT: "29090"
-  PUBLIC_PY_PORT: "29091"
 ```
 
 ## 首次启动为什么需要等待
