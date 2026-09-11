@@ -111,6 +111,49 @@ environment:
   PUBLIC_PROXY_PORT: "29090"
 ```
 
+## Cloudflare 隧道公网访问
+
+Cloudflare Tunnel 对外只通 80/443，无法直连多个流端口。镜像提供 `STREAM_ENTRY` 统一入口：设置后，M3U 里的虎牙/斗鱼频道地址统一写成 `https://域名/stream/{平台}/{房间号}`，全部走 nginx(8081) 入口，由它在容器内部转发到对应流代理，隧道只需放行一个 HTTP 端口。
+
+Compose 只把 8081 绑到本机供 cloudflared 访问：
+
+```yaml
+services:
+  livetv:
+    image: minshurui/livetv-allinone:latest
+    container_name: livetv
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8081:8081"   # 只供本机 cloudflared 访问
+    environment:
+      TZ: Asia/Shanghai
+      STREAM_ENTRY: "https://tv.example.com"
+      IPTV_REJECT_VOD: "1"
+      IPTV_MIN_CHANNELS: "20"
+    volumes:
+      - ./data:/data
+```
+
+cloudflared 配置（`~/.cloudflared/config.yml`）：
+
+```yaml
+tunnel: <隧道ID>
+credentials-file: /root/.cloudflared/<隧道ID>.json
+ingress:
+  - hostname: tv.example.com
+    service: http://localhost:8081
+  - service: http_status:404
+```
+
+最终播放地址：
+
+```text
+https://tv.example.com/allinone.m3u
+```
+
+无需在防火墙/路由器上开放其他端口；`STREAM_ENTRY` 需带 `https://` 前缀，且不要以 `/` 结尾。
+
 ## 首次启动为什么需要等待
 
 启动顺序：

@@ -399,6 +399,49 @@ http://[你的IPv6地址]:8081/allinone.m3u
 - 不要公开 `8080` 管理页；
 - `19090` 是播放器直连的新版流端口，无法只反代 M3U 就自动保护；`19091` 仅用于旧虎牙链接。
 
+### Cloudflare 隧道（公网统一入口）
+
+Cloudflare Tunnel 对外只通 80/443，无法直连多个流端口。镜像提供 `STREAM_ENTRY` 统一入口：设置后，M3U 里的虎牙/斗鱼频道地址统一写成 `https://域名/stream/{平台}/{房间号}`，全部走 nginx(8081) 入口，由它在容器内部转发到对应流代理，隧道只需放行一个 HTTP 端口，无需在路由器/防火墙开放 `19090`、`19091`、`8080`。
+
+Compose 只把 8081 绑到本机供本机 cloudflared 访问：
+
+```yaml
+services:
+  livetv:
+    image: minshurui/livetv-allinone:latest
+    container_name: livetv
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8081:8081"   # 只供本机 cloudflared 访问
+    environment:
+      TZ: Asia/Shanghai
+      STREAM_ENTRY: "https://tv.example.com"
+      IPTV_REJECT_VOD: "1"
+      IPTV_MIN_CHANNELS: "20"
+    volumes:
+      - ./data:/data
+```
+
+cloudflared 配置（`~/.cloudflared/config.yml`）：
+
+```yaml
+tunnel: <隧道ID>
+credentials-file: /root/.cloudflared/<隧道ID>.json
+ingress:
+  - hostname: tv.example.com
+    service: http://localhost:8081
+  - service: http_status:404
+```
+
+验证：
+
+```bash
+curl -fsS https://tv.example.com/allinone.m3u | sed -n '1,8p'
+```
+
+M3U 里的频道 URL 应形如 `https://tv.example.com/stream/huya/房间号`、`https://tv.example.com/stream/douyu/房间号`。注意 `STREAM_ENTRY` 要写全 `https://`，不要以 `/` 结尾。
+
 ## 首次启动要等多久
 
 | 内容 | 通常出现时间 | 失败时查看 |
