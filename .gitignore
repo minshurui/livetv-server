@@ -13,6 +13,10 @@
 *.png
 # 测试辅助
 .flv
+__pycache__/
+*.py[cod]
+huya-smoke-report.json
+smoke-artifacts/
 # 日志
 *.log
 # 环境/敏感

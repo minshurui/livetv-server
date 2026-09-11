@@ -243,6 +243,18 @@ IPTV 直链不经过 19090/19091。只有 IPTV 失败时，应直接测试该上
 http://服务器:19090/stream/huya/房间号
 ```
 
+不要只用 `/healthz` 判断播放正常，它不会访问虎牙上游。部署后可在仓库目录执行真实流测试：
+
+```bash
+python3 tests/live_stream_smoke.py \
+  --playlist-url http://服务器IP:8081/allinone.m3u \
+  --proxy-url http://服务器IP:19090 \
+  --duration 30 \
+  --report huya-smoke-report.json
+```
+
+通过标准是响应以 `FLV` 开头、30 秒至少接收 1 MiB，并且任意两次数据读取之间不超过 6 秒。报告中的 `average_mbps` 是代理实际传输速率，`longest_gap_seconds` 比单纯的 HTTP 200 更能反映卡顿风险。公网 GitHub Runner 的结果只能验证解析和代理链路；最终仍应在实际群晖和家庭网络再执行一次，因为地区、运营商和播放器缓冲策略都会影响体验。
+
 如果仍是 `19091`，说明播放器缓存了旧 M3U；删除旧订阅后重新添加。继续失败时查看：
 
 ```bash

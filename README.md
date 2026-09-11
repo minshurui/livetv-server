@@ -93,6 +93,17 @@ curl -fsS http://127.0.0.1:8081/allinone.m3u | sed -n '1,8p'
 docker inspect --format '{{.State.Health.Status}}' livetv
 ```
 
+以上只能确认服务已经启动。要验证虎牙真实播放、传输速度和最长停顿，请在仓库目录运行：
+
+```bash
+python3 tests/live_stream_smoke.py \
+  --playlist-url http://服务器IP:8081/allinone.m3u \
+  --proxy-url http://服务器IP:19090 \
+  --duration 30
+```
+
+脚本会从当前直播列表选择房间，并输出 FLV 首帧、接收字节数、平均码率和最长数据间隔。仓库 Actions 页也提供 `Live Playback Smoke Test` 手动实播任务。
+
 正确结果应满足：
 
 - `/healthz` 输出 `ok`；
