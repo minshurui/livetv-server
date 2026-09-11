@@ -40,6 +40,7 @@ HOST_PY_PORT=19091
 
 HUYA_CDN=AL
 HUYA_CODEC=264
+HUYA_MAX_RATIO=2000
 
 IPTV_MIN_CHANNELS=20
 IPTV_REJECT_VOD=1
@@ -170,8 +171,9 @@ SYNC_MIN_DOUYU=50
 |---|---|---|
 | `HUYA_CDN` | `AL` | 首选虎牙 CDN 类型；常见可选值有 `AL`、`TX`、`HS` |
 | `HUYA_CODEC` | `264` | 默认强制 H.264，兼容电视、PotPlayer 和多数 IPTV 客户端 |
+| `HUYA_MAX_RATIO` | `2000` | 选择不高于该值的最高可用码率；`500` 更流畅，`0` 使用原画 |
 
-只有日志反复显示首选 CDN 403 或无法建立连接时才尝试修改 `HUYA_CDN`。修改后重建容器，并重新加载 M3U；不要把已经过期的真实 CDN URL 固定到配置里。
+电视端卡顿时先将 `HUYA_MAX_RATIO` 从 `2000` 改为 `500`。只有日志反复显示首选 CDN 403 或无法建立连接时才尝试修改 `HUYA_CDN`。修改后重建容器，并重新加载 M3U；不要把已经过期的真实 CDN URL 固定到配置里。
 
 “列表能下载但全部平台频道连不上”，首先检查公开端口是否与宿主映射一致。
 

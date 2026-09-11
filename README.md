@@ -60,6 +60,7 @@ services:
       PUBLIC_HOST: ""
       HUYA_CDN: AL
       HUYA_CODEC: "264"
+      HUYA_MAX_RATIO: "2000" # 最高约 2000K；0=原画
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:

@@ -262,7 +262,7 @@ docker exec livetv tail -n 150 /data/lnmp/logs/livetv.log
 docker logs --tail=150 livetv
 ```
 
-默认首选 `HUYA_CDN=AL`。只有日志持续出现该线路 403/连接失败时，才在 Compose 中依次尝试 `HUYA_CDN=TX` 或 `HUYA_CDN=HS`，重建容器并重新加载列表。`HUYA_CODEC=264` 建议保持不变，避免电视端不支持 HEVC FLV。
+默认首选 `HUYA_CDN=AL`、`HUYA_MAX_RATIO=2000`。如果电视端仍有明显卡顿，先改成 `HUYA_MAX_RATIO=500`；`0` 才表示原画。只有日志持续出现该线路 403/连接失败时，才依次尝试 `HUYA_CDN=TX` 或 `HUYA_CDN=HS`。每次修改后重建容器并重新加载列表。`HUYA_CODEC=264` 建议保持不变，避免电视端不支持 HEVC FLV。
 
 ## M3U 里的 IP、域名或端口错误
 

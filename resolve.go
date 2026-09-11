@@ -97,6 +97,8 @@ type huyaLine struct {
 	cdn      string
 	uid      uint64
 	priority int
+	ratio    int
+	hasRatio bool
 }
 
 type huyaStreamInfo struct {
@@ -111,10 +113,63 @@ type huyaStreamInfo struct {
 	ExtraUID     json.RawMessage `json:"uid"`
 }
 
+type huyaMultiStreamInfo struct {
+	BitRate int `json:"iBitRate"`
+}
+
 type huyaStreamPayload struct {
 	Data []struct {
 		GameStreamInfoList []huyaStreamInfo `json:"gameStreamInfoList"`
 	} `json:"data"`
+	MultiStreamInfo []huyaMultiStreamInfo `json:"vMultiStreamInfo"`
+}
+
+func chooseHuyaRatio(payload huyaStreamPayload, maxRatioText string) (int, bool) {
+	if len(payload.MultiStreamInfo) == 0 {
+		return 0, false
+	}
+	maxRatio, err := strconv.Atoi(strings.TrimSpace(maxRatioText))
+	if err != nil || maxRatio < 0 {
+		maxRatio = 2000
+	}
+	hasSource := false
+	positive := make([]int, 0, len(payload.MultiStreamInfo))
+	seen := make(map[int]bool, len(payload.MultiStreamInfo))
+	for _, info := range payload.MultiStreamInfo {
+		ratio := info.BitRate
+		if ratio == 0 {
+			hasSource = true
+			continue
+		}
+		if ratio > 0 && !seen[ratio] {
+			seen[ratio] = true
+			positive = append(positive, ratio)
+		}
+	}
+	sort.Ints(positive)
+	if maxRatio == 0 {
+		if hasSource {
+			return 0, true
+		}
+		if len(positive) > 0 {
+			return positive[len(positive)-1], true
+		}
+		return 0, false
+	}
+	selected := 0
+	for _, ratio := range positive {
+		if ratio <= maxRatio {
+			selected = ratio
+		}
+	}
+	if selected > 0 {
+		return selected, true
+	}
+	// 没有低于上限的档位时，选择最低可用转码档；只剩原画则回退原画。
+	if len(positive) > 0 {
+		return positive[0], true
+	}
+	return 0, hasSource
 }
 
 func rawUint64(raw json.RawMessage) uint64 {
@@ -175,6 +230,7 @@ func extractHuyaLines(page string) []huyaLine {
 		if end := findJSONValueEnd(page, start); end > start {
 			var payload huyaStreamPayload
 			if err := json.Unmarshal([]byte(page[start:end]), &payload); err == nil {
+				ratio, hasRatio := chooseHuyaRatio(payload, HUYA_MAX_RATIO)
 				for _, data := range payload.Data {
 					for _, info := range data.GameStreamInfoList {
 						if info.FlvURL == "" || info.FlvAntiCode == "" || info.StreamName == "" {
@@ -194,6 +250,7 @@ func extractHuyaLines(page string) []huyaLine {
 						lines = append(lines, huyaLine{
 							base: info.FlvURL, anti: info.FlvAntiCode, stream: info.StreamName,
 							cdn: info.CDN, uid: uid, priority: priority,
+							ratio: ratio, hasRatio: hasRatio,
 						})
 					}
 				}
@@ -248,7 +305,7 @@ func decodeHuyaFM(fm string) (string, error) {
 	return prefix, nil
 }
 
-func buildHuyaAntiCode(stream, anti string, presenterUID uint64, now time.Time) (string, error) {
+func buildHuyaAntiCode(stream, anti string, presenterUID uint64, ratio int, hasRatio bool, now time.Time) (string, error) {
 	anti = strings.ReplaceAll(anti, "&amp;", "&")
 	query, err := url.ParseQuery(anti)
 	if err != nil {
@@ -303,6 +360,9 @@ func buildHuyaAntiCode(stream, anti string, presenterUID uint64, now time.Time) 
 	if HUYA_CODEC != "" {
 		result.Set("codec", HUYA_CODEC)
 	}
+	if hasRatio {
+		result.Set("ratio", strconv.Itoa(ratio))
+	}
 	if isWAP {
 		result.Set("uid", strconv.FormatUint(presenterUID, 10))
 		result.Set("uuid", strconv.FormatUint(uint64(now.UnixMilli())%uint64(^uint32(0)), 10))
@@ -345,7 +405,7 @@ func resolveHuya(rid string) string {
 		if line.stream == "" {
 			continue
 		}
-		anti, buildErr := buildHuyaAntiCode(line.stream, line.anti, line.uid, time.Now())
+		anti, buildErr := buildHuyaAntiCode(line.stream, line.anti, line.uid, line.ratio, line.hasRatio, time.Now())
 		if buildErr != nil {
 			logf("[huya %s] build %s token: %v", rid, line.cdn, buildErr)
 			continue

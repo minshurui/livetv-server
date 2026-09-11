@@ -81,6 +81,7 @@ services:
       PUBLIC_HOST: ""
       HUYA_CDN: AL
       HUYA_CODEC: "264"
+      HUYA_MAX_RATIO: "2000"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:

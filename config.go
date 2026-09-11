@@ -31,6 +31,8 @@ var (
 	PY_PORT     = envOr("PY_PORT", "19091") // 虎牙: Python stream-proxy (FLV 直通)
 	HUYA_CDN    = envOr("HUYA_CDN", "AL")    // 首选 CDN；为空时使用内置稳定性顺序
 	HUYA_CODEC  = envOr("HUYA_CODEC", "264") // 强制 H.264，兼容更多电视和旧播放器
+	// 0=原画；正数=选择不高于该值的最高可用码率，默认 2000K 降低电视端卡顿风险。
+	HUYA_MAX_RATIO = envOr("HUYA_MAX_RATIO", "2000")
 	// 宿主机映射端口可与容器内部端口不同；播放列表必须写外部端口。
 	PUBLIC_AIO_PORT   = envOr("PUBLIC_AIO_PORT", AIO_PORT)
 	PUBLIC_PROXY_PORT = envOr("PUBLIC_PROXY_PORT", PROXY_PORT)
