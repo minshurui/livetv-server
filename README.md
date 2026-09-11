@@ -61,6 +61,8 @@ services:
       HUYA_CDN: AL
       HUYA_CODEC: "264"
       HUYA_MAX_RATIO: "2000" # 最高约 2000K；0=原画
+      HUYA_GROUP_MODE: compact # 合并为 8 个大类；detail=原始分类
+      DOUYU_GROUP_MODE: compact
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -105,6 +107,8 @@ python3 tests/live_stream_smoke.py \
 
 脚本会从当前直播列表选择房间，并输出 FLV 首帧、接收字节数、平均码率和最长数据间隔。仓库 Actions 页还提供 `Live Playback Smoke Test`：除流量测试外，会使用 FFmpeg 真实解码 60 秒并检查冻结帧和循环画面。
 
+虎牙目录还会完整补抓“一起看”分类；默认把虎牙和斗鱼几十个原始游戏分组合并为 8 个大类。每个频道使用主播自己的头像，缺失时才回退平台默认图。播放器加载 M3U 后，服务会在后台预解析每组前几个虎牙/斗鱼频道，减少首次换台时的页面解析等待。
+
 正确结果应满足：
 
 - `/healthz` 输出 `ok`；
@@ -124,7 +128,7 @@ docker exec livetv tail -n 100 /data/lnmp/logs/bridge.log
 
 | 宿主端口 | 是否必需 | 谁会访问 | 用途 |
 |---:|---|---|---|
-| `8081` | 是 | 播放器 | 下载最终 `allinone.m3u` |
+| `8081` | 是 | 播放器 | 下载最终 `allinone.m3u`、读取本地缓存频道头像 |
 | `19090` | 使用虎牙/斗鱼时是 | 播放器 | Go 直播流代理、断流续接和时间戳修正 |
 | `19091` | 否 | 旧客户端 | 旧版虎牙 Python 直通兼容 |
 | `8080` | 否 | 管理员 | IPTV 页面，建议只在内网使用 |

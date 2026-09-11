@@ -324,6 +324,8 @@ docker compose -f docker/docker-compose.yml up -d --no-build
 ```yaml
 ports:
   - "8201:8081"
+environment:
+  PUBLIC_LIVETV_PORT: "8201"
 ```
 
 入口变成：
@@ -355,7 +357,7 @@ environment:
 HOST_PROXY_PORT=29090
 ```
 
-仓库 Compose 会自动把 `HOST_*` 传给 `PUBLIC_*`。
+仓库 Compose 会自动把 `HOST_*` 传给 `PUBLIC_*`，包括头像地址使用的 `PUBLIC_LIVETV_PORT`。
 
 ## IP、域名、IPv6 与反向代理
 

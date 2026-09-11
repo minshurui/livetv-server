@@ -67,6 +67,10 @@ func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(body))
 		return
 	}
+	if strings.HasPrefix(path, "/logo/") {
+		handleLogo(w, r)
+		return
+	}
 	// 线路 m3u
 	if path == "/huyayqk.m3u" || path == "/douyuyqk.m3u" || path == "/yylunbo.m3u" {
 		switch path {
@@ -129,6 +133,7 @@ func main() {
 
 	_ = os.MkdirAll(LogDir, 0755)
 	_ = os.MkdirAll(HLSRoot, 0755)
+	_ = os.MkdirAll(LogosRoot, 0755)
 	_ = os.MkdirAll(AppleCMS, 0755)
 	_ = os.MkdirAll(filepath.Dir(ChannelsF), 0755)
 

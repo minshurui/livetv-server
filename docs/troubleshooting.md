@@ -174,6 +174,37 @@ SYNC_MIN_DOUYU=5
 
 这只允许目录写入，不会把解析失败的房间伪装成直播。
 
+### 虎牙“一起看”只有几个人或分类太碎
+
+旧版只抓虎牙热门总榜前 15 页，而平台当前目录有更多分页，所以靠后分类会缺项。新版默认通过 `SYNC_HUYA_EXTRA_GAME_IDS=2135` 单独抓完整“一起看”，并使用 `HUYA_GROUP_MODE=compact` 合并为 8 个大类。检查实际同步结果：
+
+```bash
+docker exec livetv tail -n 120 /data/lnmp/logs/sync-channels.log
+docker compose up -d --force-recreate
+```
+
+日志应包含 `分类 2135` 的总页数和 `[huya] 共抓取` 数量。若想恢复每个游戏一个组，设置 `HUYA_GROUP_MODE=detail` 和 `DOUYU_GROUP_MODE=detail`。
+
+### 虎牙或斗鱼换台慢
+
+新版会复用解析站点的 TCP/TLS 连接、合并播放器对同一房间的并发探测，并在加载 M3U 后后台预解析每组前几个频道。默认配置适合家庭服务器：
+
+```dotenv
+HUYA_CACHE_TTL=300
+DOUYU_CACHE_TTL=300
+PREWARM_PER_GROUP=2
+PREWARM_MAX_CHANNELS=16
+PREWARM_WORKERS=3
+```
+
+修改后重建容器并重新加载 M3U。若平台对你的出口 IP 限流，先把 `PREWARM_WORKERS` 降为 `1`；若完全不需要预热，设 `PREWARM_PER_GROUP=0`。预热只获取签名地址，不会持续拉取视频流，也不会长期占用直播带宽。电视端仍需等待主播 GOP 中的下一个关键帧，因此无法保证每次都瞬间出画。
+
+### 频道图标全部相同或不更新
+
+新版会把虎牙 `avatar180` 和斗鱼 `av` 关联到每个频道。播放器第一次请求 `/logo/{平台}/{房间号}` 时才下载，并永久保存到 `/data/lnmp/allinone/logos/`；之后同步、重启和升级都直接读取该文件，不会因主播换头像而覆盖。只有接口缺头像时才使用平台默认图。
+
+如果 8081 映射成了其他宿主端口，单文件 Compose 还必须设置 `PUBLIC_LIVETV_PORT`；仓库自带 Compose 会自动处理。升级并等待目录同步后，重新添加播放列表；部分电视应用会长期缓存旧图标，需要在应用内清理节目单/图标缓存。
+
 ### 检查 IPTV 快照
 
 ```bash

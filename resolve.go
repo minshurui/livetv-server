@@ -20,10 +20,12 @@ import (
 )
 
 var (
-	huyaCache  = newTTLCache()
-	douyuCache = newTTLCache()
-	dyCache    = newTTLCache()
-	yyCache    = newTTLCache()
+	huyaCache    = newTTLCache()
+	douyuCache   = newTTLCache()
+	dyCache      = newTTLCache()
+	yyCache      = newTTLCache()
+	huyaFlights  stringFlightGroup
+	douyuFlights stringFlightGroup
 )
 
 func md5hex(s string) string {
@@ -377,6 +379,15 @@ func resolveHuya(rid string) string {
 	if v, ok := huyaCache.get(key); ok {
 		return v
 	}
+	return huyaFlights.do(key, func() string {
+		if v, ok := huyaCache.get(key); ok {
+			return v
+		}
+		return resolveHuyaUncached(rid, key)
+	})
+}
+
+func resolveHuyaUncached(rid, key string) string {
 	page, err := httpGetText("https://www.huya.com/"+rid, UA_PC, TIMEOUT_S)
 	if err != nil {
 		logf("[huya %s] room page: %v", rid, err)
@@ -412,7 +423,7 @@ func resolveHuya(rid string) string {
 		}
 		base := strings.Replace(line.base, "http://", "https://", 1)
 		full := fmt.Sprintf("%s/%s.flv?%s", strings.TrimRight(base, "/"), line.stream, anti)
-		huyaCache.set(key, full, 60)
+		huyaCache.set(key, full, HUYA_CACHE_TTL)
 		return full
 	}
 	huyaCache.set(key, "", 60)
@@ -421,8 +432,9 @@ func resolveHuya(rid string) string {
 
 // ---------------- 斗鱼 ----------------
 var (
-	douyuRidRe  = regexp.MustCompile(`rid":(\d{1,8}),"vipId`)
-	douyuShowRe = regexp.MustCompile(`"showTime"\s*:\s*(\d{10})`)
+	douyuRidRe        = regexp.MustCompile(`rid":(\d{1,8}),"vipId`)
+	douyuShowRe       = regexp.MustCompile(`"showTime"\s*:\s*(\d{10})`)
+	douyuNumericRidRe = regexp.MustCompile(`^\d{1,10}$`)
 )
 
 func pageShowAgeHours(page string) float64 {
@@ -442,21 +454,45 @@ func resolveDouyu(rid string) string {
 	if v, ok := douyuCache.get(key); ok {
 		return v
 	}
-	res := resolveDouyuInner(rid)
-	douyuCache.set(key, res, 120)
-	return res
+	return douyuFlights.do(key, func() string {
+		if v, ok := douyuCache.get(key); ok {
+			return v
+		}
+		res := resolveDouyuInner(rid)
+		douyuCache.set(key, res, DOUYU_CACHE_TTL)
+		return res
+	})
 }
 
 func resolveDouyuInner(rid string) string {
 	ua := UA_PC
 	page := ""
 	realRid := rid
-	if p, err := httpGetText("https://m.douyu.com/"+rid, ua, TIMEOUT_S); err == nil {
-		page = p
-		if m := douyuRidRe.FindStringSubmatch(page); len(m) > 1 {
-			realRid = m[1]
+	// 同步目录里的 rid 已是数字真实房间号，直接请求播放 API，省掉一次移动页抓取。
+	// 只有兼容外部传入的别名时，才抓 m.douyu.com 做 rid 转换。
+	if !douyuNumericRidRe.MatchString(rid) {
+		if p, err := httpGetText("https://m.douyu.com/"+rid, ua, TIMEOUT_S); err == nil {
+			page = p
+			if m := douyuRidRe.FindStringSubmatch(page); len(m) > 1 {
+				realRid = m[1]
+			}
 		}
 	}
+	result := resolveDouyuPreview(rid, realRid, page, ua)
+	if result != "" || realRid != rid || !douyuNumericRidRe.MatchString(rid) {
+		return result
+	}
+
+	// 数字短号通常就是目录中的真实 rid；若直连 API 失败，再抓页面兼容少数数字别名。
+	if p, err := httpGetText("https://m.douyu.com/"+rid, ua, TIMEOUT_S); err == nil {
+		if m := douyuRidRe.FindStringSubmatch(p); len(m) > 1 && m[1] != rid {
+			return resolveDouyuPreview(rid, m[1], p, ua)
+		}
+	}
+	return ""
+}
+
+func resolveDouyuPreview(rid, realRid, page, ua string) string {
 	apiURL := "https://playweb.douyucdn.cn/lapi/live/hlsH5Preview/" + realRid
 	for attempt := 1; attempt <= 2; attempt++ {
 		t13 := strconv.FormatInt(time.Now().UnixMilli(), 10)

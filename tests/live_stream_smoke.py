@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对运行中的 livetv-server 做虎牙真实 FLV 播放冒烟测试。"""
+"""对运行中的 livetv-server 做虎牙/斗鱼真实 FLV 播放冒烟测试。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOM_RE = re.compile(r"/stream/huya/(\d+)")
 UA = "Mozilla/5.0 (livetv-server live smoke test)"
 
 
@@ -28,19 +27,21 @@ def percentile(values: list[float], quantile: float) -> float:
     return ordered[index]
 
 
-def fetch_room_ids(playlist_url: str, wait_seconds: int, limit: int) -> list[str]:
-    """等待频道同步完成，并从 M3U 里取若干个当前虎牙房间。"""
+def fetch_room_ids(playlist_url: str, wait_seconds: int, limit: int,
+                   platform: str = "huya") -> list[str]:
+    """等待频道同步完成，并从 M3U 里取若干个当前直播房间。"""
+    room_re = re.compile(rf"/stream/{re.escape(platform)}/(\d+)")
     deadline = time.monotonic() + wait_seconds
-    last_error = "M3U 中还没有虎牙频道"
+    last_error = f"M3U 中还没有 {platform} 频道"
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(playlist_url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=10) as response:
                 body = response.read(4 * 1024 * 1024).decode("utf-8", "replace")
-            rooms = list(dict.fromkeys(ROOM_RE.findall(body)))
+            rooms = list(dict.fromkeys(room_re.findall(body)))
             if rooms:
                 return rooms[:limit]
-            last_error = f"{playlist_url} 中没有 /stream/huya/ 房间"
+            last_error = f"{playlist_url} 中没有 /stream/{platform}/ 房间"
         except (OSError, urllib.error.URLError) as exc:
             last_error = str(exc)
         time.sleep(3)
@@ -53,8 +54,13 @@ def probe_room(
     duration: int,
     min_bytes: int,
     max_gap: float,
+    platform: str = "huya",
+    max_connect_seconds: float = 10.0,
+    fresh: bool = False,
 ) -> dict[str, object]:
-    stream_url = f"{proxy_url.rstrip('/')}/stream/huya/{room_id}?fresh=1"
+    stream_url = f"{proxy_url.rstrip('/')}/stream/{platform}/{room_id}"
+    if fresh:
+        stream_url += "?fresh=1"
     started = time.monotonic()
     result: dict[str, object] = {
         "room_id": room_id,
@@ -119,6 +125,10 @@ def probe_room(
                 problems.append(f"接收字节不足：{total} < {min_bytes}")
             if longest_gap > max_gap:
                 problems.append(f"最长数据间隔过大：{longest_gap:.2f}s > {max_gap:.2f}s")
+            if result["connect_seconds"] > max_connect_seconds:
+                problems.append(
+                    f"首次出流过慢：{result['connect_seconds']:.2f}s > {max_connect_seconds:.2f}s"
+                )
             result["problems"] = problems
             result["passed"] = not problems
     except urllib.error.HTTPError as exc:
@@ -134,10 +144,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--playlist-url", default="http://127.0.0.1:8081/allinone.m3u")
     parser.add_argument("--proxy-url", default="http://127.0.0.1:19090")
+    parser.add_argument("--platform", choices=("huya", "douyu"), default="huya")
     parser.add_argument("--room-id", help="指定虎牙房间；留空时从 M3U 自动选择")
     parser.add_argument("--duration", type=int, default=30, help="每个成功候选的实播秒数")
     parser.add_argument("--min-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--max-gap", type=float, default=0.5, help="允许的最长无数据秒数")
+    parser.add_argument("--max-connect-seconds", type=float, default=10.0,
+                        help="从请求到收到 FLV 响应头允许的最长秒数")
     parser.add_argument("--candidates", type=int, default=5, help="最多尝试的当前直播房间数")
     parser.add_argument("--playlist-wait", type=int, default=180)
     parser.add_argument("--report", default="huya-smoke-report.json")
@@ -148,6 +161,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--min-bytes 必须大于 0")
     if args.max_gap <= 0:
         parser.error("--max-gap 必须大于 0")
+    if args.max_connect_seconds <= 0:
+        parser.error("--max-connect-seconds 必须大于 0")
     if not 1 <= args.candidates <= 20:
         parser.error("--candidates 必须在 1 到 20 之间")
     return args
@@ -163,6 +178,7 @@ def main() -> int:
             "duration_seconds": args.duration,
             "minimum_bytes": args.min_bytes,
             "maximum_gap_seconds": args.max_gap,
+            "maximum_connect_seconds": args.max_connect_seconds,
         },
         "attempts": [],
         "passed": False,
@@ -170,7 +186,7 @@ def main() -> int:
 
     try:
         rooms = [args.room_id] if args.room_id else fetch_room_ids(
-            args.playlist_url, args.playlist_wait, args.candidates
+            args.playlist_url, args.playlist_wait, args.candidates, args.platform
         )
         for room_id in rooms:
             print(f"[smoke] 测试虎牙房间 {room_id}", flush=True)
@@ -180,6 +196,8 @@ def main() -> int:
                 args.duration,
                 args.min_bytes,
                 args.max_gap,
+                platform=args.platform,
+                max_connect_seconds=args.max_connect_seconds,
             )
             report["attempts"].append(attempt)
             if attempt["passed"]:
@@ -190,6 +208,7 @@ def main() -> int:
                     f"FLV={attempt.get('flv_magic')} "
                     f"bytes={attempt.get('bytes')} "
                     f"avg={attempt.get('average_mbps')}Mbps "
+                    f"connect={attempt.get('connect_seconds')}s "
                     f"p99_gap={attempt.get('gap_p99_seconds')}s "
                     f"max_gap={attempt.get('longest_gap_seconds')}s",
                     flush=True,

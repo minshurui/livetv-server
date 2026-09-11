@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   huya-live-smoke:
-    name: Huya real FLV playback
+    name: Huya + Douyu real FLV playback
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -54,7 +54,10 @@ jobs:
             -e PUBLIC_HOST=127.0.0.1 \
             -e PUBLIC_PROXY_PORT=19090 \
             -e SYNC_HUYA_PAGES=1 \
+            -e SYNC_HUYA_EXTRA_GAME_IDS= \
             -e SYNC_MIN_HUYA=1 \
+            -e SYNC_DOUYU_PAGES=1 \
+            -e SYNC_MIN_DOUYU=1 \
             "$IMAGE"
           for attempt in $(seq 1 30); do
             if curl -fsS --max-time 3 http://127.0.0.1:8081/healthz >/dev/null; then
@@ -70,56 +73,81 @@ jobs:
           docker logs livetv-smoke
           exit 1
 
-      - name: Probe real Huya FLV stream
+      - name: Probe real Huya and Douyu FLV streams
         run: |
-          args=(
-            --playlist-url http://127.0.0.1:8081/allinone.m3u
-            --proxy-url http://127.0.0.1:19090
-            --duration "$SMOKE_DURATION"
-            --min-bytes 1048576
-            --max-gap 0.5
-            --candidates 5
-            --playlist-wait 180
-            --report smoke-artifacts/huya-smoke-report.json
-          )
-          if [[ -n "$HUYA_ROOM_ID" ]]; then
-            args+=(--room-id "$HUYA_ROOM_ID")
+          for platform in huya douyu; do
+            args=(
+              --platform "$platform"
+              --playlist-url http://127.0.0.1:8081/allinone.m3u
+              --proxy-url http://127.0.0.1:19090
+              --duration "$SMOKE_DURATION"
+              --min-bytes 1048576
+              --max-gap 0.5
+              --max-connect-seconds 10
+              --candidates 5
+              --playlist-wait 180
+              --report "smoke-artifacts/${platform}-smoke-report.json"
+            )
+            if [[ "$platform" == huya && -n "$HUYA_ROOM_ID" ]]; then
+              args+=(--room-id "$HUYA_ROOM_ID")
+            fi
+            python3 tests/live_stream_smoke.py "${args[@]}"
+          done
+
+      - name: Verify persistent channel logo cache
+        shell: bash
+        run: |
+          playlist=$(curl -fsS http://127.0.0.1:8081/allinone.m3u)
+          logo_url=$(PLAYLIST="$playlist" python3 -c 'import os,re; m=re.search(r"tvg-logo=\"([^\"]+/logo/[^\"]+)\"", os.environ["PLAYLIST"]); print(m.group(1) if m else "")')
+          if [[ -z "$logo_url" ]]; then
+            echo "::error::M3U 中没有本地频道头像地址"
+            exit 1
           fi
-          python3 tests/live_stream_smoke.py "${args[@]}"
+          curl -fsS -D smoke-artifacts/logo-headers.txt -o smoke-artifacts/logo.img "$logo_url"
+          test -s smoke-artifacts/logo.img
+          grep -qi '^content-type: image/' smoke-artifacts/logo-headers.txt
+          cached=$(docker exec livetv-smoke find /data/lnmp/allinone/logos -type f -size +0c | head -n 1)
+          test -n "$cached"
+          before=$(docker exec livetv-smoke stat -c '%Y:%s' "$cached")
+          curl -fsS -o /dev/null "$logo_url"
+          after=$(docker exec livetv-smoke stat -c '%Y:%s' "$cached")
+          test "$before" = "$after"
 
       - name: Decode video and detect frozen or repeated frames
         shell: bash
         run: |
           mkdir -p smoke-artifacts
-          room_id=$(python3 -c 'import json; print(json.load(open("smoke-artifacts/huya-smoke-report.json"))["selected_room_id"])')
-          stream_url="http://127.0.0.1:19090/stream/huya/${room_id}?fresh=1"
-          set +e
-          timeout --signal=INT --kill-after=10s 90s \
-            docker exec livetv-smoke ffmpeg \
-              -hide_banner -nostdin -loglevel warning -xerror \
-              -rw_timeout 10000000 \
-              -i "$stream_url" \
-              -t 60 -map 0:v:0 -an \
-              -vf 'scale=320:-2,fps=2' \
-              -f framemd5 - \
-              > smoke-artifacts/huya-frames.md5 \
-              2> smoke-artifacts/huya-ffmpeg.log
-          ffmpeg_rc=$?
-          set -e
-          if [[ "$ffmpeg_rc" -ne 0 ]]; then
-            echo "::error::FFmpeg 实际解码失败，退出码 $ffmpeg_rc"
-            tail -n 100 smoke-artifacts/huya-ffmpeg.log
-            exit 1
-          fi
-          python3 tests/analyze_framemd5.py \
-            --input smoke-artifacts/huya-frames.md5 \
-            --report smoke-artifacts/huya-frame-report.json \
-            --fps 2 \
-            --min-frames 60 \
-            --max-freeze-seconds 8 \
-            --max-loop-period-seconds 10 \
-            --min-loop-cycles 3 \
-            --min-loop-span-seconds 12
+          for platform in huya douyu; do
+            room_id=$(PLATFORM="$platform" python3 -c 'import json,os; p=os.environ["PLATFORM"]; print(json.load(open("smoke-artifacts/"+p+"-smoke-report.json"))["selected_room_id"])')
+            stream_url="http://127.0.0.1:19090/stream/${platform}/${room_id}?fresh=1"
+            set +e
+            timeout --signal=INT --kill-after=10s 90s \
+              docker exec livetv-smoke ffmpeg \
+                -hide_banner -nostdin -loglevel warning -xerror \
+                -rw_timeout 10000000 \
+                -i "$stream_url" \
+                -t 60 -map 0:v:0 -an \
+                -vf 'scale=320:-2,fps=2' \
+                -f framemd5 - \
+                > "smoke-artifacts/${platform}-frames.md5" \
+                2> "smoke-artifacts/${platform}-ffmpeg.log"
+            ffmpeg_rc=$?
+            set -e
+            if [[ "$ffmpeg_rc" -ne 0 ]]; then
+              echo "::error::${platform} FFmpeg 实际解码失败，退出码 $ffmpeg_rc"
+              tail -n 100 "smoke-artifacts/${platform}-ffmpeg.log"
+              exit 1
+            fi
+            python3 tests/analyze_framemd5.py \
+              --input "smoke-artifacts/${platform}-frames.md5" \
+              --report "smoke-artifacts/${platform}-frame-report.json" \
+              --fps 2 \
+              --min-frames 60 \
+              --max-freeze-seconds 8 \
+              --max-loop-period-seconds 10 \
+              --min-loop-cycles 3 \
+              --min-loop-span-seconds 12
+          done
 
       - name: Collect diagnostics
         if: always()
@@ -131,14 +159,14 @@ jobs:
               "smoke-artifacts/${log}.log" 2>/dev/null || true
           done
           grep -c 'reconnect#' smoke-artifacts/livetv.log \
-            > smoke-artifacts/huya-reconnect-count.txt 2>/dev/null || true
+            > smoke-artifacts/reconnect-count.txt 2>/dev/null || true
           find smoke-artifacts -maxdepth 1 -type f -print
 
       - name: Upload playback report and logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: huya-live-smoke-${{ github.run_id }}
+          name: live-smoke-${{ github.run_id }}
           path: smoke-artifacts/
           if-no-files-found: warn
           retention-days: 14

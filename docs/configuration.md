@@ -133,7 +133,7 @@ SYNC_MIN_DOUYU=50
 
 | 变量 | 默认值 | 需要播放器访问 | 用途 |
 |---|---:|---|---|
-| `HOST_LIVETV_PORT` | `8081` | 是 | 最终 M3U 和 `/healthz` |
+| `HOST_LIVETV_PORT` | `8081` | 是 | 最终 M3U、`/healthz` 和本地缓存频道头像 |
 | `HOST_PROXY_PORT` | `19090` | 使用虎牙/斗鱼时是 | Go FLV/HLS 续流代理 |
 | `HOST_PY_PORT` | `19091` | 否 | 旧版虎牙 Python 代理兼容 |
 | `HOST_IPTV_UI_PORT` | `8080` | 否 | `iptv-api` 管理页 |
@@ -157,13 +157,14 @@ SYNC_MIN_DOUYU=50
 | `RES_PORT` | `35456` | Python 旧解析服务 |
 | `PY_PORT` | `19091` | Python 旧版虎牙兼容代理 |
 
-下面三个值决定 M3U 里真正写入的端口：
+下面四个值决定 M3U 里真正写入的端口：
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `PUBLIC_AIO_PORT` | 跟随 `AIO_PORT` | 单平台解析地址 |
 | `PUBLIC_PROXY_PORT` | 跟随 `PROXY_PORT` | 新版虎牙和斗鱼频道地址 |
 | `PUBLIC_PY_PORT` | 跟随 `PY_PORT` | 旧版虎牙频道兼容地址 |
+| `PUBLIC_LIVETV_PORT` | Docker 为 `8081`，Termux 跟随 `PUBLIC_AIO_PORT` | M3U 中本地头像缓存地址 |
 
 ## 虎牙播放参数
 
@@ -172,6 +173,11 @@ SYNC_MIN_DOUYU=50
 | `HUYA_CDN` | `AL` | 首选虎牙 CDN 类型；常见可选值有 `AL`、`TX`、`HS` |
 | `HUYA_CODEC` | `264` | 默认强制 H.264，兼容电视、PotPlayer 和多数 IPTV 客户端 |
 | `HUYA_MAX_RATIO` | `2000` | 选择不高于该值的最高可用码率；`500` 更流畅，`0` 使用原画 |
+| `HUYA_CACHE_TTL` | `300` | 虎牙成功解析地址缓存秒数；允许范围 30–1800 |
+| `DOUYU_CACHE_TTL` | `300` | 斗鱼成功解析地址缓存秒数；允许范围 30–1800 |
+| `PREWARM_PER_GROUP` | `2` | 加载 M3U 后每个平台每组后台预解析数量；`0` 关闭 |
+| `PREWARM_MAX_CHANNELS` | `16` | 每个平台一次最多预解析频道数 |
+| `PREWARM_WORKERS` | `3` | 后台预解析并发数 |
 
 电视端卡顿时先将 `HUYA_MAX_RATIO` 从 `2000` 改为 `500`。只有日志反复显示首选 CDN 403 或无法建立连接时才尝试修改 `HUYA_CDN`。修改后重建容器，并重新加载 M3U；不要把已经过期的真实 CDN URL 固定到配置里。
 
@@ -231,11 +237,16 @@ docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `SYNC_HUYA_PAGES` | `15` | 虎牙最多抓取页数 |
+| `SYNC_HUYA_EXTRA_GAME_IDS` | `2135` | 额外补抓的虎牙分类 ID；默认 `2135` 为“一起看”，逗号分隔，留空关闭 |
+| `SYNC_HUYA_EXTRA_PAGES` | `0` | 每个额外分类抓取页数；`0` 表示按接口报告的总页数抓完整分类 |
+| `SYNC_HUYA_WORKERS` | `6` | 虎牙目录并发请求数；网络不稳定时可降到 `2` |
+| `HUYA_GROUP_MODE` | `compact` | `compact` 将虎牙合并为 8 个大类；`detail` 保留原始游戏分类 |
+| `DOUYU_GROUP_MODE` | `compact` | `compact` 将斗鱼合并为相同大类；`detail` 保留原始游戏分类 |
 | `SYNC_DOUYU_PAGES` | `20` | 斗鱼最多抓取页数 |
 | `SYNC_MIN_HUYA` | `20` | 虎牙新目录最低房间数 |
 | `SYNC_MIN_DOUYU` | `20` | 斗鱼新目录最低房间数 |
 
-容器启动时同步一次，之后每 6 小时同步。最低数量只保护目录文件不被异常响应覆盖，不能代替真实拉流检测。
+容器启动时同步一次，之后每 6 小时同步。虎牙热门总榜当前只抓前 15 页，因此会再按分类接口完整补抓“一起看”；房间号会自动去重。虎牙和斗鱼默认精简为“一起看、网游电竞、手游、单机、娱乐、户外、体育、其他”8 个组，最终 M3U 中会显示为 `虎牙·一起看`、`斗鱼·手游` 等名称。某个目录成功页数不足 80% 时保留旧文件，避免一次网络故障把数千条频道缩成几十条。最低数量保护仍不能代替真实拉流检测。
 
 ## 代理和 HLS 生命周期
 

@@ -37,6 +37,8 @@ services:
       HUYA_CDN: AL
       HUYA_CODEC: "264"
       HUYA_MAX_RATIO: "2000"
+      HUYA_GROUP_MODE: compact
+      DOUYU_GROUP_MODE: compact
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -69,6 +71,8 @@ docker inspect --format '{{.State.Health.Status}}' livetv
 
 正确结果是 `/healthz` 输出 `ok`、M3U 第一行是 `#EXTM3U`、容器最终为 `healthy`。
 
+镜像默认完整补抓虎牙“一起看”分类，并把虎牙和斗鱼整理为 8 个大组；频道图标使用主播头像。加载 M3U 时还会后台预解析每组前几个虎牙/斗鱼频道，降低冷启动换台延迟。
+
 ## 群晖
 
 在 Container Manager 中新建“项目”，项目目录可选：
@@ -92,6 +96,8 @@ http://群晖IP:8081/allinone.m3u
 ```yaml
 ports:
   - "8201:8081"
+environment:
+  PUBLIC_LIVETV_PORT: "8201"
 ```
 
 播放地址改为 `http://服务器:8201/allinone.m3u`。

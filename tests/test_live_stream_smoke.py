@@ -24,13 +24,15 @@ class SmokeHandler(BaseHTTPRequestHandler):
                 "#EXTM3U\n"
                 "#EXTINF:-1 group-title=\"虎牙\",测试\n"
                 "http://127.0.0.1:19090/stream/huya/12345\n"
+                "#EXTINF:-1 group-title=\"斗鱼\",测试\n"
+                "http://127.0.0.1:19090/stream/douyu/67890\n"
             ).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path.startswith("/stream/huya/12345"):
+        if self.path.startswith(("/stream/huya/12345", "/stream/douyu/67890")):
             self.send_response(200)
             self.send_header("Content-Type", "video/x-flv")
             self.end_headers()
@@ -64,6 +66,8 @@ class LiveStreamSmokeTests(unittest.TestCase):
     def test_extracts_room_from_playlist(self):
         rooms = self.smoke.fetch_room_ids(f"{self.base}/allinone.m3u", 1, 5)
         self.assertEqual(rooms, ["12345"])
+        douyu = self.smoke.fetch_room_ids(f"{self.base}/allinone.m3u", 1, 5, "douyu")
+        self.assertEqual(douyu, ["67890"])
 
     def test_measures_real_flv_bytes(self):
         result = self.smoke.probe_room(

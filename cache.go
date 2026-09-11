@@ -15,6 +15,40 @@ type ttlCache struct {
 	m  map[string]cacheEntry
 }
 
+type stringFlightCall struct {
+	done chan struct{}
+	val  string
+}
+
+// stringFlightGroup 合并同一房间的并发解析。部分播放器会先探测再立即播放，
+// 没有合并时会同时抓两次房间页，既拖慢换台也更容易触发平台限流。
+type stringFlightGroup struct {
+	mu sync.Mutex
+	m  map[string]*stringFlightCall
+}
+
+func (g *stringFlightGroup) do(key string, fn func() string) string {
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = make(map[string]*stringFlightCall)
+	}
+	if call, ok := g.m[key]; ok {
+		g.mu.Unlock()
+		<-call.done
+		return call.val
+	}
+	call := &stringFlightCall{done: make(chan struct{})}
+	g.m[key] = call
+	g.mu.Unlock()
+
+	call.val = fn()
+	close(call.done)
+	g.mu.Lock()
+	delete(g.m, key)
+	g.mu.Unlock()
+	return call.val
+}
+
 func newTTLCache() *ttlCache {
 	return &ttlCache{m: make(map[string]cacheEntry)}
 }

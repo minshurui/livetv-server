@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // 数据根目录: 优先 DATA；未设置时使用当前用户目录，Docker 容器用 DATA=/data 覆盖。
@@ -21,6 +22,7 @@ var (
 	TvF       = AppleCMS + "/.iptv-result.m3u"
 	LogDir    = LNMP + "/logs"
 	HLSRoot   = LNMP + "/allinone/hls"
+	LogosRoot = LNMP + "/allinone/logos"
 )
 
 var (
@@ -28,15 +30,22 @@ var (
 	PUBLIC_HOST = envOr("PUBLIC_HOST", "127.0.0.1")
 	AIO_PORT    = envOr("AIO_PORT", "35455")
 	PROXY_PORT  = envOr("PROXY_PORT", "19090")
-	PY_PORT     = envOr("PY_PORT", "19091") // 虎牙: Python stream-proxy (FLV 直通)
+	PY_PORT     = envOr("PY_PORT", "19091")  // 虎牙: Python stream-proxy (FLV 直通)
 	HUYA_CDN    = envOr("HUYA_CDN", "AL")    // 首选 CDN；为空时使用内置稳定性顺序
 	HUYA_CODEC  = envOr("HUYA_CODEC", "264") // 强制 H.264，兼容更多电视和旧播放器
 	// 0=原画；正数=选择不高于该值的最高可用码率，默认 2000K 降低电视端卡顿风险。
-	HUYA_MAX_RATIO = envOr("HUYA_MAX_RATIO", "2000")
+	HUYA_MAX_RATIO       = envOr("HUYA_MAX_RATIO", "2000")
+	HUYA_CACHE_TTL       = envInt("HUYA_CACHE_TTL", 300, 30, 1800)
+	DOUYU_CACHE_TTL      = envInt("DOUYU_CACHE_TTL", 300, 30, 1800)
+	PREWARM_PER_GROUP    = envInt("PREWARM_PER_GROUP", 2, 0, 10)
+	PREWARM_MAX_CHANNELS = envInt("PREWARM_MAX_CHANNELS", 16, 0, 100)
+	PREWARM_WORKERS      = envInt("PREWARM_WORKERS", 3, 1, 10)
 	// 宿主机映射端口可与容器内部端口不同；播放列表必须写外部端口。
 	PUBLIC_AIO_PORT   = envOr("PUBLIC_AIO_PORT", AIO_PORT)
 	PUBLIC_PROXY_PORT = envOr("PUBLIC_PROXY_PORT", PROXY_PORT)
 	PUBLIC_PY_PORT    = envOr("PUBLIC_PY_PORT", PY_PORT)
+	// Docker 走 nginx 8081；Termux 未设置时与 AIO_PORT 相同。
+	PUBLIC_LIVETV_PORT = envOr("PUBLIC_LIVETV_PORT", PUBLIC_AIO_PORT)
 )
 
 const (
@@ -54,6 +63,14 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func envInt(k string, def, minValue, maxValue int) int {
+	value, err := strconv.Atoi(os.Getenv(k))
+	if err != nil || value < minValue || value > maxValue {
+		return def
+	}
+	return value
 }
 
 func dataRootOrHome() string {

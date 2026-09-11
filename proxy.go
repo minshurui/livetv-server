@@ -35,25 +35,38 @@ import (
 var httpClientV4 = &http.Client{
 	Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			d := &net.Dialer{Timeout: 15 * time.Second}
+			d := &net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}
 			return d.DialContext(ctx, "tcp4", addr)
 		},
-		MaxIdleConnsPerHost: 4,
-		DisableCompression:  true,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   8 * time.Second,
+		ResponseHeaderTimeout: 8 * time.Second,
+		DisableCompression:    true,
 	},
 }
 
-// newV4Client: 强制 IPv4 + 禁 gzip 的 http.Client(带超时), 供解析抓取用
+// 解析请求复用同一 Transport/TCP/TLS 连接。旧实现每换一个频道都新建 Transport，
+// 必须重复 DNS、TCP 和 TLS 握手，是连续换台时最明显的固定延迟之一。
+var resolverTransportV4 = &http.Transport{
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d := &net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}
+		return d.DialContext(ctx, "tcp4", addr)
+	},
+	MaxIdleConns:          64,
+	MaxIdleConnsPerHost:   16,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   8 * time.Second,
+	ResponseHeaderTimeout: 8 * time.Second,
+	DisableCompression:    true,
+}
+
+// newV4Client: 强制 IPv4 + 禁 gzip 的共享传输客户端(每次调用仍有独立总超时)。
 func newV4Client(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				d := &net.Dialer{Timeout: 10 * time.Second}
-				return d.DialContext(ctx, "tcp4", addr)
-			},
-			DisableCompression: true,
-		},
+		Timeout:   timeout,
+		Transport: resolverTransportV4,
 	}
 }
 
