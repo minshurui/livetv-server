@@ -25,11 +25,21 @@ IPTV_MIN_CHANNELS="${IPTV_MIN_CHANNELS:-20}"
 IPTV_REJECT_VOD="${IPTV_REJECT_VOD:-1}"
 IPTV_BLOCKLIST="${IPTV_BLOCKLIST:-}"
 IPTV_BLOCKLIST_FILE="${IPTV_BLOCKLIST_FILE:-$APPLECMS_DIR/iptv-blocklist.txt}"
+# 直播目录必须周期刷新；旧值为每 6 小时，导致开播/下播状态长期停留在首次同步。
+# 限制为 5~59 分钟，避免 cron 的分钟字段生成非法表达式。
+SYNC_CHANNELS_MINUTES="${SYNC_CHANNELS_MINUTES:-15}"
 
 export APP_WORKDIR DATA PUBLIC_HOST AIO_PORT PROXY_PORT PY_PORT RES_PORT APP_PORT
 export PUBLIC_AIO_PORT PUBLIC_PROXY_PORT PUBLIC_PY_PORT
 export NGINX_HTTP_PORT NGINX_RTMP_PORT LIVETV_HTTP_PORT IPTV_MIN_CHANNELS
 export IPTV_REJECT_VOD IPTV_BLOCKLIST IPTV_BLOCKLIST_FILE
+case "$SYNC_CHANNELS_MINUTES" in
+  ''|*[!0-9]*) echo "[entry] 无效 SYNC_CHANNELS_MINUTES=$SYNC_CHANNELS_MINUTES" >&2; exit 2 ;;
+esac
+if [ "$SYNC_CHANNELS_MINUTES" -lt 5 ] || [ "$SYNC_CHANNELS_MINUTES" -gt 59 ]; then
+  echo "[entry] SYNC_CHANNELS_MINUTES 必须在 5~59 之间" >&2
+  exit 2
+fi
 export IPTV_API_PLAIN_OUTPUT=1 IPTV_API_SKIP_VERSION_CHECK=1
 
 GO_LOG="$LOG_DIR/livetv.log"
@@ -171,10 +181,10 @@ python3 /opt/livetv/sync_channels.py \
   done
 ) &
 
-# 显式写 crontab，避免依赖 Alpine 是否预置 /etc/periodic/6h 调度规则。
-cat > /etc/crontabs/root <<'CRONEOF'
+# 显式写 crontab，避免依赖 Alpine 是否预置周期调度规则。
+cat > /etc/crontabs/root <<CRONEOF
 */15 * * * * /opt/livetv/scripts/bridge_iptv.sh
-17 */6 * * * python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json" >> "$DATA/lnmp/logs/sync-channels.log" 2>&1
+*/$SYNC_CHANNELS_MINUTES * * * * python3 /opt/livetv/sync_channels.py --out "$DATA/lnmp/allinone/channels.json" >> "$DATA/lnmp/logs/sync-channels.log" 2>&1
 CRONEOF
 if [ -n "${NAS_HOST:-}" ] && [ -n "${NAS_USER:-}" ] && [ -n "${NAS_M3U:-}" ]; then
   printf '7,22,37,52 * * * * /opt/livetv/scripts/sync_iptv_from_nas.sh\n' >> /etc/crontabs/root

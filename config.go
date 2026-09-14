@@ -35,8 +35,10 @@ var (
 	HUYA_CODEC  = envOr("HUYA_CODEC", "264") // 强制 H.264，兼容更多电视和旧播放器
 	// 0=原画；正数=选择不高于该值的最高可用码率，默认 2000K 降低电视端卡顿风险。
 	HUYA_MAX_RATIO       = envOr("HUYA_MAX_RATIO", "2000")
-	HUYA_CACHE_TTL       = envInt("HUYA_CACHE_TTL", 300, 30, 1800)
-	DOUYU_CACHE_TTL      = envInt("DOUYU_CACHE_TTL", 300, 30, 1800)
+	// 播放地址是带签名的临时地址，不能沿用旧版 5 分钟缓存，否则房间
+	// 停播/复播后会长时间保持第一次状态。默认 30 秒，失败仍按 FAIL_TTL 短缓存。
+	HUYA_CACHE_TTL       = envInt("HUYA_CACHE_TTL", 30, 5, 600)
+	DOUYU_CACHE_TTL      = envInt("DOUYU_CACHE_TTL", 30, 5, 600)
 	PREWARM_PER_GROUP    = envInt("PREWARM_PER_GROUP", 2, 0, 10)
 	PREWARM_MAX_CHANNELS = envInt("PREWARM_MAX_CHANNELS", 16, 0, 100)
 	PREWARM_WORKERS      = envInt("PREWARM_WORKERS", 3, 1, 10)

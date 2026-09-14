@@ -25,6 +25,20 @@ UA_PC = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
          "(KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36")
 TIMEOUT = 15
 FAIL_CACHE_TTL = 15  # 解析失败(None)的缓存秒数: 刚开播/限流恢复的房间最多 15s 内脱离"坏房"状态
+
+
+def env_int(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if minimum <= value <= maximum else default
+
+
+# 与 Go 解析器保持一致：成功地址只短缓存，避免旧版 60/120 秒缓存把
+# 停播、复播状态固定在第一次请求结果。
+HUYA_CACHE_TTL = env_int("HUYA_CACHE_TTL", 30, 5, 600)
+DOUYU_CACHE_TTL = env_int("DOUYU_CACHE_TTL", 30, 5, 600)
 _cache = {}
 _cache_lock = threading.Lock()
 
@@ -60,7 +74,7 @@ def cached(key, ttl):
 
 
 # ---------------- 虎牙(复刻 NAS: www页面官方签名 + 真实uid重签名 + 无fm) ----------------
-@cached("huya", ttl=60)
+@cached("huya", ttl=HUYA_CACHE_TTL)
 def resolve_huya(rid):
     """虎牙: www.huya.com 房间页 → sFlvUrl/sStreamName/sFlvAntiCode(官方参数)
     重签名: MD5(fm前缀_uid_streamname_seqid_wsTime)
@@ -182,7 +196,7 @@ def _page_show_age_hours(page):
     return (time.time() - int(m.group(1))) / 3600.0
 
 
-@cached("douyu", ttl=120)
+@cached("douyu", ttl=DOUYU_CACHE_TTL)
 def resolve_douyu(rid):
     """斗鱼: m.douyu.com 页面 → playweb hlsH5Preview → rtmp_url+rtmp_live → FLV
 
@@ -341,6 +355,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(301)
         self.send_header("Location", target)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # 临时签名地址不能被播放器或中间代理把第一次状态缓存下来。
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

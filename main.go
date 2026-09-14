@@ -103,6 +103,11 @@ func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		target = resolve(rid)
 	}
+	// 解析接口返回的是临时签名地址。禁止播放器/中间代理缓存 301，
+	// 否则某些客户端会把第一次开播状态和 Location 长期复用。
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	if target == "" {
 		// 旧实现跳到测试录像，播放器会把离线房间误认为“可播直播”。
 		// 保持路径接口不变，但用明确的 404 表示未开播/解析失败。

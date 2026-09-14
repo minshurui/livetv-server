@@ -190,8 +190,9 @@ docker compose up -d --force-recreate
 新版会复用解析站点的 TCP/TLS 连接、合并播放器对同一房间的并发探测，并在加载 M3U 后后台预解析每组前几个频道。默认配置适合家庭服务器：
 
 ```dotenv
-HUYA_CACHE_TTL=300
-DOUYU_CACHE_TTL=300
+HUYA_CACHE_TTL=30
+DOUYU_CACHE_TTL=30
+SYNC_CHANNELS_MINUTES=15
 PREWARM_PER_GROUP=2
 PREWARM_MAX_CHANNELS=16
 PREWARM_WORKERS=3
