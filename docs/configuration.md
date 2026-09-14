@@ -213,6 +213,11 @@ http://[2001:db8::50]:8081/allinone.m3u
 |---|---:|---|
 | `IPTV_MIN_CHANNELS` | `20` | 过滤后少于该数量时保留旧快照 |
 | `IPTV_REJECT_VOD` | `1` | `1` 排除明显 VOD，`0` 允许 |
+| `IPTV_CHANNEL_SCOPE` | `all` | `all` 保留模板中的央视、卫视和地方频道；`cctv_satellite` 只发布 CCTV/CETV 和已知省级卫视 |
+| `IPTV_VERIFY_STREAMS` | `1` | 发布前使用容器内 FFmpeg 解码首帧，失败线路不写入最终列表 |
+| `IPTV_VERIFY_TIMEOUT` | `12` | 每条 IPTV 线路验证超时秒数 |
+| `IPTV_VERIFY_WORKERS` | `6` | 并行验证线路数量；低性能 NAS 可降到 `2` |
+| `IPTV_URLS_PER_CHANNEL` | `2` | 每频道最多发布的已验证线路数；`0` 不限制 |
 | `IPTV_BLOCKLIST` | 空 | 逗号分隔 URL 关键字，适合临时规则 |
 | `IPTV_BLOCKLIST_FILE` | `/data/lnmp/applecms/iptv-blocklist.txt` | 持久化黑名单文件 |
 
@@ -234,7 +239,12 @@ recorded.example.invalid
 docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
 ```
 
-过滤器会识别常见文件扩展名、明显 VOD 查询参数、正时长 `EXTINF` 和黑名单，但不能保证识别所有内容型循环直播。
+默认发布过程保留频道模板中的全部分类，再调用 FFmpeg 实际解码一个视频帧。
+验证发生在部署容器自身的网络中，比只检查 HTTP 200 更接近电视端的真实播放
+条件。旧数据卷中的 `config/demo.txt` 可以继续维护。只想保留央视和省级卫视时
+设置 `IPTV_CHANNEL_SCOPE=cctv_satellite`。
+
+过滤器还会识别常见文件扩展名、明显 VOD 查询参数、正时长 `EXTINF` 和黑名单，但不能保证识别所有内容型循环直播。
 
 ## 虎牙/斗鱼目录同步
 

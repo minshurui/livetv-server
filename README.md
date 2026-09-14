@@ -67,6 +67,8 @@ services:
       HUYA_MAX_RATIO: "2000" # 最高约 2000K；0=原画
       HUYA_GROUP_MODE: compact # 合并为 8 个大类；detail=原始分类
       DOUYU_GROUP_MODE: compact
+      IPTV_CHANNEL_SCOPE: all            # 保留模板中的央视、卫视和地方频道
+      IPTV_VERIFY_STREAMS: "1"           # 发布前用 FFmpeg 解码首帧
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -149,6 +151,8 @@ docker exec livetv tail -n 100 /data/lnmp/logs/bridge.log
 | 地址解析 | 重新获取有时效性的真实 CDN 地址 | 避免保存已经过期的签名 |
 | 实际拉流 | HTTP 状态、FLV 文件头、拉取字节量 | 排除网页、空响应、占位响应 |
 | IPTV 检测 | 可播性、速度、清晰度、HLS 状态 | 排除大量失效和低质量源 |
+| 发布前复核 | FFmpeg 实际解码首帧，每频道最多保留 2 条有效线路 | 阻止测速后已失效的地址进入最终列表 |
+| 频道范围 | 默认保留模板中的央视、卫视和地方频道；可选 `cctv_satellite` 精简模式 | 节目范围由可维护的频道模板控制，未知订阅条目不会绕过测速 |
 | 发布过滤 | 正时长 `EXTINF`、视频文件扩展名、URL 黑名单 | 排除明显 VOD/录播文件 |
 | last-good | 新列表数量过少时拒绝覆盖 | 避免一次网络故障清空好列表 |
 
@@ -171,6 +175,10 @@ recorded.example.invalid
 ```bash
 docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
 ```
+
+默认 `IPTV_CHANNEL_SCOPE=all` 会保留上游模板中的央视、卫视和地方频道，
+但每条线路仍必须通过实际解码。只想要央视和省级卫视时，可在 Compose 中
+设置 `IPTV_CHANNEL_SCOPE=cctv_satellite`。旧数据卷里的 `demo.txt` 无需删除。
 
 ## 数据、升级和删除
 

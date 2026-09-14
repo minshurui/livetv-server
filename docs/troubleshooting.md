@@ -233,10 +233,30 @@ docker exec livetv tail -n 80 /data/lnmp/logs/bridge.log
 | `输入不存在` | `iptv-api` 尚未生成原始结果 | 检查订阅和更新日志 |
 | `低于下限` | 新结果太少，last-good 生效 | 检查失效源或调整 `IPTV_MIN_CHANNELS` |
 | `blocklist=N` | 命中用户黑名单 | 检查 `iptv-blocklist.txt` |
+| `outside_scope=N` | 当前启用了央视/卫视精简模式 | 需要地方频道时设置 `IPTV_CHANNEL_SCOPE=all` |
+| `unplayable=N` | FFmpeg 无法在超时内解码视频首帧 | 检查订阅质量和容器网络 |
+| `url_limit=N` | 同频道通过验证的线路超过发布上限 | 正常过滤；可调整 `IPTV_URLS_PER_CHANNEL` |
 | `positive_duration=N` | M3U 标记了正时长，按 VOD 排除 | 确认是否应设置 `IPTV_REJECT_VOD=0` |
 | `vod_file=N` | URL 像 MP4/MKV 等文件 | 正常过滤；误判时关闭 VOD 过滤 |
 
 若 `subscribe.txt` 中的来源被网络阻断，需要更换来源或为上游配置代理，不能靠反复重启解决。
+
+## IPTV 出现不可播线路或节目范围不对
+
+默认 `IPTV_CHANNEL_SCOPE=all` 会保留频道模板中的央视、卫视和地方频道；
+`cctv_satellite` 才会精简为 `IPTV·央视`、`IPTV·卫视` 两组。EPG 中存在
+某个频道不等于订阅中一定存在它的直播地址，最终只发布找到并验证可播的线路。
+
+升级后手动执行一次并查看筛选统计：
+
+```bash
+docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
+docker exec livetv tail -n 50 /data/lnmp/logs/bridge.log
+```
+
+发布前 FFmpeg 会实际解码每条候选线路的首帧，无法解码的地址不会进入最终
+列表。低性能 NAS 可以把
+`IPTV_VERIFY_WORKERS` 从 `6` 降为 `2`，但不建议关闭 `IPTV_VERIFY_STREAMS`。
 
 ## 列表能下载但频道播放失败
 

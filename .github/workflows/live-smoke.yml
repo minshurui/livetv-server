@@ -90,7 +90,50 @@ jobs:
             test "$DOUYU_CACHE_TTL" = 30
             test "$STREAM_READ_IDLE_SECONDS" = 10
             test "$SYNC_CHANNELS_MINUTES" = 15
+            test "$IPTV_CHANNEL_SCOPE" = all
+            test "$IPTV_VERIFY_STREAMS" = 1
+            test "$IPTV_VERIFY_TIMEOUT" = 12
+            test "$IPTV_VERIFY_WORKERS" = 6
+            test "$IPTV_URLS_PER_CHANNEL" = 2
           '
+
+      - name: Verify final IPTV playback gate
+        run: |
+          docker exec livetv-smoke sh -ec '
+            mkdir -p /tmp/iptv-smoke
+            ffmpeg -hide_banner -loglevel error \
+              -f lavfi -i testsrc=size=160x90:rate=10 -t 2 \
+              -c:v mpeg2video -f mpegts -y /tmp/iptv-smoke/live.ts
+            cat > /tmp/iptv-smoke/input.m3u <<"EOF"
+          #EXTM3U
+          #EXTINF:-1 group-title="地方频道",广东珠江
+          http://127.0.0.1:18080/live.ts
+          #EXTINF:-1 group-title="地方频道",无效测试频道
+          http://127.0.0.1:18080/missing.ts
+          EOF
+          '
+          docker exec -d livetv-smoke sh -c \
+            'cd /tmp/iptv-smoke && exec python3 -m http.server 18080'
+          ready=0
+          for attempt in $(seq 1 20); do
+            if docker exec livetv-smoke curl -fsS --max-time 2 \
+              http://127.0.0.1:18080/live.ts >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+          docker exec livetv-smoke /opt/livetv/filter_iptv.py \
+            --input /tmp/iptv-smoke/input.m3u \
+            --output /tmp/iptv-smoke/output.m3u \
+            --channel-scope all --verify-streams --verify-timeout 5 \
+            --verify-workers 2 --urls-per-channel 2 --min-channels 1
+          docker exec livetv-smoke grep -q 'live.ts' /tmp/iptv-smoke/output.m3u
+          if docker exec livetv-smoke grep -q 'missing.ts' /tmp/iptv-smoke/output.m3u; then
+            echo "::error::不可解码的 IPTV 地址进入了最终列表"
+            exit 1
+          fi
 
       - name: Probe real Huya and Douyu FLV streams
         run: |

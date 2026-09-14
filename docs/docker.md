@@ -82,6 +82,8 @@ services:
       HUYA_CDN: AL
       HUYA_CODEC: "264"
       HUYA_MAX_RATIO: "2000"
+      IPTV_CHANNEL_SCOPE: all
+      IPTV_VERIFY_STREAMS: "1"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:

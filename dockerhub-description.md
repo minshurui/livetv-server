@@ -43,6 +43,8 @@ services:
       HUYA_MAX_RATIO: "2000"
       HUYA_GROUP_MODE: compact
       DOUYU_GROUP_MODE: compact
+      IPTV_CHANNEL_SCOPE: all
+      IPTV_VERIFY_STREAMS: "1"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -194,6 +196,10 @@ data/
 ```
 
 ## 录播和坏源过滤
+
+最终列表默认保留频道模板中的央视、卫视和地方频道。每个候选地址会由
+FFmpeg 实际解码首帧，每频道最多发布 2 条通过验证的线路。只需要央视和
+省级卫视时设置 `IPTV_CHANNEL_SCOPE=cctv_satellite`。
 
 镜像会过滤正时长 `EXTINF`、MP4/MKV 等明显 VOD 文件、部分结束型 HLS 和用户黑名单。发现已经人工确认的循环录播后：
 

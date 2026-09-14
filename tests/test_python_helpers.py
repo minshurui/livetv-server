@@ -22,9 +22,13 @@ class PythonHelperTests(unittest.TestCase):
     def test_image_defaults_match_refresh_contract(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
         for setting in ("HUYA_CACHE_TTL=30", "DOUYU_CACHE_TTL=30",
-                        "STREAM_READ_IDLE_SECONDS=10", "SYNC_CHANNELS_MINUTES=15"):
+                        "STREAM_READ_IDLE_SECONDS=10", "SYNC_CHANNELS_MINUTES=15",
+                        "IPTV_CHANNEL_SCOPE=all", "IPTV_VERIFY_STREAMS=1"):
             self.assertIn(setting + " \\", dockerfile)
         self.assertNotIn("CACHE_TTL=300", dockerfile)
+        env_example = (ROOT / "docker/.env.example").read_text()
+        self.assertIn("HUYA_CACHE_TTL=30", env_example)
+        self.assertIn("DOUYU_CACHE_TTL=30", env_example)
 
     @classmethod
     def setUpClass(cls):
@@ -209,6 +213,70 @@ udp://@239.0.0.1:1234
         self.assertFalse(rejected)
         self.assertIn("#EXTVLCOPT:http-user-agent=example", result)
         self.assertIn("udp://@239.0.0.1:1234", result)
+
+    def test_filter_core_scope_rejects_non_core_channels_and_repairs_groups(self):
+        source = """#EXTM3U
+#EXTINF:-1 group-title="错误分组",CCTV-1综合
+https://live.example/cctv1.m3u8
+#EXTINF:-1 group-title="地方频道",湖南卫视高清
+https://live.example/hunan.m3u8
+#EXTINF:-1 group-title="央视卫视",广东珠江
+https://live.example/zhujiang.m3u8
+#EXTINF:-1 group-title="央视卫视",湖南公共
+https://live.example/hunan-public.m3u8
+"""
+        result, count, rejected = self.filter_iptv.filter_m3u(
+            source, [], channel_scope="cctv_satellite"
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(rejected["outside_scope"], 2)
+        self.assertIn('group-title="IPTV·央视",CCTV-1综合', result)
+        self.assertIn('group-title="IPTV·卫视",湖南卫视高清', result)
+        self.assertNotIn("广东珠江", result)
+        self.assertNotIn("湖南公共", result)
+        self.assertIsNone(self.filter_iptv.classify_core_channel("CCTV-18测试"))
+        self.assertIsNone(self.filter_iptv.classify_core_channel("CETV-5测试"))
+
+    def test_filter_default_scope_keeps_configured_local_channels(self):
+        source = """#EXTM3U
+#EXTINF:-1 group-title="☘️广东频道",广东珠江
+https://live.example/zhujiang.m3u8
+"""
+        result, count, rejected = self.filter_iptv.filter_m3u(source, [])
+        self.assertEqual(count, 1)
+        self.assertFalse(rejected)
+        self.assertIn("广东珠江", result)
+        self.assertIn('group-title="☘️广东频道"', result)
+
+    def test_filter_publish_probe_removes_unplayable_and_limits_fallbacks(self):
+        source = """#EXTM3U
+#EXTINF:-1,CCTV-1
+https://dead.example/cctv1.m3u8
+#EXTINF:-1,CCTV-1
+https://good.example/cctv1-a.m3u8
+#EXTINF:-1,CCTV-1
+https://good.example/cctv1-b.m3u8
+#EXTINF:-1,CCTV-1
+https://good.example/cctv1-c.m3u8
+"""
+
+        def fake_probe(entry, timeout):
+            self.assertEqual(timeout, 7)
+            self.assertNotIn("cctv1-c", entry.url)
+            return "good.example" in entry.url
+
+        result, count, rejected = self.filter_iptv.filter_m3u(
+            source, [], channel_scope="cctv_satellite", verify_streams=True,
+            verify_timeout=7, verify_workers=2, urls_per_channel=2, probe=fake_probe,
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(rejected["unplayable"], 1)
+        self.assertEqual(rejected["url_limit"], 1)
+        self.assertNotIn("dead.example", result)
+        self.assertIn("cctv1-a.m3u8", result)
+        self.assertIn("cctv1-b.m3u8", result)
+        self.assertNotIn("cctv1-c.m3u8", result)
+        self.assertEqual(self.filter_iptv.unique_channel_count(result), 1)
 
     def test_filter_cli_preserves_last_good_when_result_too_small(self):
         with tempfile.TemporaryDirectory() as tmp:
