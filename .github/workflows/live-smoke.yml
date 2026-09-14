@@ -83,6 +83,15 @@ jobs:
           docker logs livetv-smoke
           exit 1
 
+      - name: Check effective image refresh defaults
+        run: |
+          docker exec livetv-smoke sh -ec '
+            test "$HUYA_CACHE_TTL" = 30
+            test "$DOUYU_CACHE_TTL" = 30
+            test "$STREAM_READ_IDLE_SECONDS" = 10
+            test "$SYNC_CHANNELS_MINUTES" = 15
+          '
+
       - name: Probe real Huya and Douyu FLV streams
         run: |
           for platform in huya douyu; do

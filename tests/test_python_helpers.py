@@ -19,6 +19,13 @@ def load_module(name, relative_path):
 
 
 class PythonHelperTests(unittest.TestCase):
+    def test_image_defaults_match_refresh_contract(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        for setting in ("HUYA_CACHE_TTL=30", "DOUYU_CACHE_TTL=30",
+                        "STREAM_READ_IDLE_SECONDS=10", "SYNC_CHANNELS_MINUTES=15"):
+            self.assertIn(setting + " \\", dockerfile)
+        self.assertNotIn("CACHE_TTL=300", dockerfile)
+
     @classmethod
     def setUpClass(cls):
         cls.stream_proxy = load_module("stream_proxy", "docker/stream-proxy.py")
