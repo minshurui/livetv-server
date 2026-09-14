@@ -180,35 +180,56 @@ jobs:
         run: |
           mkdir -p smoke-artifacts
           for platform in huya douyu; do
-            room_id=$(PLATFORM="$platform" python3 -c 'import json,os; p=os.environ["PLATFORM"]; print(json.load(open("smoke-artifacts/"+p+"-smoke-report.json"))["selected_room_id"])')
-            stream_url="http://127.0.0.1:19090/stream/${platform}/${room_id}?fresh=1"
-            set +e
-            timeout --signal=INT --kill-after=10s 90s \
-              docker exec livetv-smoke ffmpeg \
-                -hide_banner -nostdin -loglevel warning -xerror \
-                -rw_timeout 10000000 \
-                -i "$stream_url" \
-                -t 60 -map 0:v:0 -an \
-                -vf 'scale=320:-2,fps=2' \
-                -f framemd5 - \
-                > "smoke-artifacts/${platform}-frames.md5" \
-                2> "smoke-artifacts/${platform}-ffmpeg.log"
-            ffmpeg_rc=$?
-            set -e
-            if [[ "$ffmpeg_rc" -ne 0 ]]; then
-              echo "::error::${platform} FFmpeg 实际解码失败，退出码 $ffmpeg_rc"
-              tail -n 100 "smoke-artifacts/${platform}-ffmpeg.log"
+            mapfile -t room_ids < <(PLATFORM="$platform" python3 - <<'PY'
+          import json, os
+          from tests.live_stream_smoke import fetch_room_ids
+          platform = os.environ["PLATFORM"]
+          selected = json.load(open(f"smoke-artifacts/{platform}-smoke-report.json"))["selected_room_id"]
+          rooms = fetch_room_ids("http://127.0.0.1:8081/allinone.m3u", 30, 5, platform)
+          # 避免立刻对刚完成 60 秒测速的同一房间再次建连；平台可能短时限流。
+          ordered = [room for room in rooms if room != selected][:2] + [selected]
+          print("\n".join(dict.fromkeys(ordered)))
+          PY
+            )
+            platform_passed=0
+            for room_id in "${room_ids[@]}"; do
+              stream_url="http://127.0.0.1:19090/stream/${platform}/${room_id}"
+              frame_file="smoke-artifacts/${platform}-${room_id}-frames.md5"
+              ffmpeg_log="smoke-artifacts/${platform}-${room_id}-ffmpeg.log"
+              frame_report="smoke-artifacts/${platform}-${room_id}-frame-report.json"
+              set +e
+              timeout --signal=INT --kill-after=10s 90s \
+                docker exec livetv-smoke ffmpeg \
+                  -hide_banner -nostdin -loglevel warning -xerror \
+                  -rw_timeout 10000000 \
+                  -i "$stream_url" \
+                  -t 60 -map 0:v:0 -an \
+                  -vf 'scale=320:-2,fps=2' \
+                  -f framemd5 - \
+                  > "$frame_file" 2> "$ffmpeg_log"
+              ffmpeg_rc=$?
+              if [[ "$ffmpeg_rc" -eq 0 ]]; then
+                python3 tests/analyze_framemd5.py \
+                  --input "$frame_file" --report "$frame_report" \
+                  --fps 2 --min-frames 60 --max-freeze-seconds 8 \
+                  --max-loop-period-seconds 10 --min-loop-cycles 3 \
+                  --min-loop-span-seconds 12
+                analyze_rc=$?
+              else
+                analyze_rc=1
+              fi
+              set -e
+              if [[ "$ffmpeg_rc" -eq 0 && "$analyze_rc" -eq 0 ]]; then
+                platform_passed=1
+                break
+              fi
+              echo "${platform} 房间 ${room_id} 解码/画面检测失败，尝试下一候选"
+              tail -n 30 "$ffmpeg_log" || true
+            done
+            if [[ "$platform_passed" -ne 1 ]]; then
+              echo "::error::${platform} 的候选房间均未通过 FFmpeg 解码和画面检测"
               exit 1
             fi
-            python3 tests/analyze_framemd5.py \
-              --input "smoke-artifacts/${platform}-frames.md5" \
-              --report "smoke-artifacts/${platform}-frame-report.json" \
-              --fps 2 \
-              --min-frames 60 \
-              --max-freeze-seconds 8 \
-              --max-loop-period-seconds 10 \
-              --min-loop-cycles 3 \
-              --min-loop-span-seconds 12
           done
 
       - name: Collect diagnostics
