@@ -4,8 +4,11 @@ package main
 // 对齐: allinone.py serve_line_m3u + live-m3u.php
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -127,34 +130,56 @@ func loadChannels() channelsFile {
 	return ch
 }
 
-// aliveWhitelist: 白名单新鲜(<ALIVE_MAXAGE)才返回 set; 过期/缺失返回 nil(=全量保底)
-func aliveWhitelist() map[string]bool {
-	stampB, err1 := os.ReadFile(StampF)
-	aliveB, err2 := os.ReadFile(AliveF)
-	if err1 != nil || err2 != nil {
-		return nil
+// 单文件原子快照，绑定被检测的目录版本与检测开始时间。
+type aliveSnapshot struct {
+	Catalog   string   `json:"catalog"`
+	CheckedAt int64    `json:"checked_at"`
+	Alive     []string `json:"alive"`
+}
+
+func catalogVersion(ch channelsFile) string {
+	rids := make([]string, 0, len(ch["douyu"]))
+	for _, entry := range ch["douyu"] {
+		rids = append(rids, entry[0])
 	}
-	ts, err := parseFloat(strings.TrimSpace(string(stampB)))
-	if err != nil || time.Now().Unix()-int64(ts) >= ALIVE_MAXAGE {
+	sort.Strings(rids)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(rids, "\n"))))
+}
+
+func readAliveSnapshot() (aliveSnapshot, error) {
+	var snapshot aliveSnapshot
+	b, err := os.ReadFile(AliveF + ".json")
+	if err != nil {
+		return snapshot, err
+	}
+	err = json.Unmarshal(b, &snapshot)
+	return snapshot, err
+}
+
+// 旧版两文件快照没有目录版本，不能用于隐藏新开播频道。
+func aliveWhitelist() map[string]bool {
+	return aliveWhitelistFor(loadChannels())
+}
+
+func aliveWhitelistFor(ch channelsFile) map[string]bool {
+	snapshot, err := readAliveSnapshot()
+	age := time.Now().Unix() - snapshot.CheckedAt
+	if err != nil || age < 0 || age >= ALIVE_MAXAGE || snapshot.Catalog != catalogVersion(ch) {
 		return nil
 	}
 	set := map[string]bool{}
-	for _, r := range strings.Fields(string(aliveB)) {
+	for _, r := range snapshot.Alive {
 		set[r] = true
 	}
 	return set
 }
 
 func aliveAgeSec() int64 {
-	b, err := os.ReadFile(StampF)
-	if err != nil {
+	snapshot, err := readAliveSnapshot()
+	if err != nil || snapshot.Catalog != catalogVersion(loadChannels()) {
 		return -1
 	}
-	ts, err := parseFloat(strings.TrimSpace(string(b)))
-	if err != nil {
-		return -1
-	}
-	return time.Now().Unix() - int64(ts)
+	return time.Now().Unix() - snapshot.CheckedAt
 }
 
 func addGroupPrefix(inf, prefix string) string {
@@ -200,7 +225,7 @@ func lineM3U(platform, host string) string {
 	}
 	alive := map[string]bool(nil)
 	if platform == "douyu" {
-		alive = aliveWhitelist()
+		alive = aliveWhitelistFor(ch)
 	}
 	entries := ch[platform]
 	maybePrewarmPlatform(platform, filterChannelEntries(entries, alive))
@@ -231,7 +256,8 @@ func aggregateM3U(host string) string {
 	var sb strings.Builder
 	sb.WriteString("#EXTM3U\n")
 	age := aliveAgeSec()
-	set := aliveWhitelist()
+	ch := loadChannels()
+	set := aliveWhitelistFor(ch)
 	n := len(set)
 	ageStr := "无"
 	if age >= 0 {
@@ -239,7 +265,6 @@ func aggregateM3U(host string) string {
 	}
 	sb.WriteString("# livetv 实时聚合 " + nowStr() + " | 斗鱼白名单 " + itoa(n) + " rid (age " + ageStr + ")\n")
 
-	ch := loadChannels()
 	maybePrewarmPlatform("huya", ch["huya"])
 	maybePrewarmPlatform("douyu", filterChannelEntries(ch["douyu"], set))
 	// 虎牙: 全量, 19090 Go FLV 续流层处理 CDN 断流和时间戳回退。

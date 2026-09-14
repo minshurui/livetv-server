@@ -23,7 +23,7 @@ func newRand() *rand.Rand {
 }
 
 // ---------------- 35455 handler (对齐 allinone.py do_GET) ----------------
-type aioHandler struct{}
+type aioHandler struct{ resolve streamResolver }
 
 // reqHost: 从请求 Host 头提取"外部可达的主机名/IP"(去掉端口)。
 // 换 WiFi 后手机 IP 会变, 若 m3u 还用启动时的 PUBLIC_HOST 快照就会失效;
@@ -54,6 +54,9 @@ func normalizeURLHost(h string) string {
 }
 
 func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.URL.Path, "/logo/") {
+		noStore(w)
+	}
 	path := strings.SplitN(r.URL.Path, "?", 2)[0]
 	host := reqHost(r)
 	// 聚合 m3u (nginx 8081 反代到此处, 替代 live-m3u.php)
@@ -83,25 +86,25 @@ func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// /{platform}/{rid} → 301
+	// /{platform}/{rid} → 临时签名地址，不得永久重定向。
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) != 2 {
 		http.Error(w, "not supported: "+path, 404)
 		return
 	}
 	platform, rid := parts[0], parts[1]
-	resolve := resolverFor(platform)
-	if resolve == nil {
+	if resolverFor(platform) == nil {
 		http.Error(w, "not supported: "+path, 404)
 		return
 	}
-	fresh := strings.Contains(r.URL.RawQuery, "fresh=1")
-	target := ""
-	if fresh {
-		delCacheFor(platform, rid)
-		target = resolve(rid)
-	} else {
-		target = resolve(rid)
+	fresh := r.URL.Query().Get("fresh") == "1"
+	resolve := h.resolve
+	if resolve == nil {
+		resolve = resolvePlayback
+	}
+	target := resolve(r.Context(), platform, rid, fresh)
+	if r.Context().Err() != nil {
+		return
 	}
 	// 解析接口返回的是临时签名地址。禁止播放器/中间代理缓存 301，
 	// 否则某些客户端会把第一次开播状态和 Location 长期复用。
@@ -116,10 +119,17 @@ func (h *aioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", target)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(301)
+	w.WriteHeader(http.StatusFound)
+}
+
+func noStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 }
 
 func serveBody(w http.ResponseWriter, ct, body string) {
+	noStore(w)
 	w.Header().Set("Content-Type", ct)
 	w.Write([]byte(body))
 }

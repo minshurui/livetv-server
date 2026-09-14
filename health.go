@@ -8,6 +8,7 @@ package main
 // 防重叠: atomic 锁 (Python 版 pgrep 锁)
 
 import (
+	"encoding/json"
 	"os"
 	"sort"
 	"strconv"
@@ -28,6 +29,12 @@ func isHealthRunning() bool { return atomic.LoadInt32(&healthRunning) == 1 }
 
 // maybeTriggerHealth: m3u 拉取时调用; 白名单旧/缺失则后台触发(防重叠)
 func maybeTriggerHealth() {
+	healthMu.Lock()
+	recent := time.Now().Unix()-healthLastRun < 60
+	healthMu.Unlock()
+	if recent {
+		return
+	}
 	age := aliveAgeSec()
 	if age < 0 || age >= ALIVE_TRIGGER {
 		go runHealthCheck("m3u-trigger")
@@ -115,7 +122,8 @@ func runHealthCheck(reason string) {
 	sort.Strings(alive)
 
 	// 落盘
-	writeAlive(alive)
+	writeAliveSnapshot(aliveSnapshot{Catalog: catalogVersion(ch), CheckedAt: start.Unix(), Alive: alive})
+	writeAlive(alive) // 保留旧文件给外部脚本读取；Go 只读取带版本的快照。
 	logf("[health] === 完成: 真可播 %d/%d, 用时 %.0fs ===", len(alive), total, time.Since(start).Seconds())
 }
 
@@ -173,4 +181,19 @@ func writeAlive(rids []string) {
 	stamp := strconv.FormatInt(time.Now().Unix(), 10)
 	_ = os.WriteFile(StampF, []byte(stamp), 0644)
 	logf("[health] 白名单 %d rid → %s", len(rids), AliveF)
+}
+
+func writeAliveSnapshot(snapshot aliveSnapshot) {
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	tmp := AliveF + ".json.tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		logf("[health] snapshot write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, AliveF+".json"); err != nil {
+		logf("[health] snapshot rename failed: %v", err)
+	}
 }

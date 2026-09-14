@@ -34,14 +34,15 @@ var (
 	HUYA_CDN    = envOr("HUYA_CDN", "AL")    // 首选 CDN；为空时使用内置稳定性顺序
 	HUYA_CODEC  = envOr("HUYA_CODEC", "264") // 强制 H.264，兼容更多电视和旧播放器
 	// 0=原画；正数=选择不高于该值的最高可用码率，默认 2000K 降低电视端卡顿风险。
-	HUYA_MAX_RATIO       = envOr("HUYA_MAX_RATIO", "2000")
+	HUYA_MAX_RATIO = envOr("HUYA_MAX_RATIO", "2000")
 	// 播放地址是带签名的临时地址，不能沿用旧版 5 分钟缓存，否则房间
 	// 停播/复播后会长时间保持第一次状态。默认 30 秒，失败仍按 FAIL_TTL 短缓存。
-	HUYA_CACHE_TTL       = envInt("HUYA_CACHE_TTL", 30, 5, 600)
-	DOUYU_CACHE_TTL      = envInt("DOUYU_CACHE_TTL", 30, 5, 600)
-	PREWARM_PER_GROUP    = envInt("PREWARM_PER_GROUP", 2, 0, 10)
-	PREWARM_MAX_CHANNELS = envInt("PREWARM_MAX_CHANNELS", 16, 0, 100)
-	PREWARM_WORKERS      = envInt("PREWARM_WORKERS", 3, 1, 10)
+	HUYA_CACHE_TTL           = envInt("HUYA_CACHE_TTL", 30, 5, 600)
+	DOUYU_CACHE_TTL          = envInt("DOUYU_CACHE_TTL", 30, 5, 600)
+	PREWARM_PER_GROUP        = envInt("PREWARM_PER_GROUP", 2, 0, 10)
+	PREWARM_MAX_CHANNELS     = envInt("PREWARM_MAX_CHANNELS", 16, 0, 100)
+	PREWARM_WORKERS          = envInt("PREWARM_WORKERS", 3, 1, 10)
+	STREAM_READ_IDLE_SECONDS = envInt("STREAM_READ_IDLE_SECONDS", 10, 2, 120)
 	// 宿主机映射端口可与容器内部端口不同；播放列表必须写外部端口。
 	PUBLIC_AIO_PORT   = envOr("PUBLIC_AIO_PORT", AIO_PORT)
 	PUBLIC_PROXY_PORT = envOr("PUBLIC_PROXY_PORT", PROXY_PORT)
@@ -55,7 +56,7 @@ const (
 	UA_ANDROID      = "Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.100 Mobile Safari/537.36"
 	TIMEOUT_S       = 15
 	FAIL_TTL        = 15   // 解析失败缓存秒数
-	ALIVE_MAXAGE    = 3600 // 白名单新鲜窗口 (live-m3u.php 同款 3600)
+	ALIVE_MAXAGE    = 300  // 检测开始时间起最多 5 分钟；超时后只作历史记录
 	ALIVE_TRIGGER   = 300  // 超过此秒数 → m3u 拉取触发后台健康检查
 	HealthIntervalS = 1800 // 全量健康检查周期(30min)
 )

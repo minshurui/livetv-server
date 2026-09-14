@@ -45,13 +45,9 @@ func mkAudioTag(ts uint32, isSeq bool) []byte {
 	b[5] = byte(ts >> 8)
 	b[6] = byte(ts)
 	b[7] = byte(ts >> 24)
-	if isSeq {
-		b[11] = 0xAF // AAC seq header (高4位=10 AAC, 低4位=0)
-	} else {
-		b[11] = 0xAF // AAC raw... 低4位非0才是raw; 简化用 0xAF 不行, 用 0xA1
-	}
+	b[11] = 0xAF // SoundFormat=AAC，低四位是采样率/位深/声道，不是包类型。
 	if !isSeq {
-		b[11] = 0xA1 // soundFormat=10(AAC), 其余非0 → raw frame
+		b[12] = 1 // AACPacketType: 0=配置，1=音频数据
 	}
 	pts := 11 + ds
 	b[11+ds] = byte(pts >> 24)

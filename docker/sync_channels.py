@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import argparse, concurrent.futures, json, os, sys, tempfile, time, urllib.parse, urllib.request
+import fcntl
+import signal
 try:
     from xml.sax.saxutils import escape as _xml_escape
 except Exception:
@@ -169,6 +171,31 @@ def build_extinf(game, display, is_huya, logo=""):
     return ('#EXTINF:-1 tvg-logo="%s" group-title="%s", %s'
             % (logo, _xml_escape(game, attrs), _xml_escape(display)))
 
+def guarded_sync(out_path, action, timeout=240):
+    """进程锁覆盖完整抓取/发布过程；启动任务和 cron 不可交错写入旧结果。"""
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path + ".lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("[sync] 同一目录已有同步任务，跳过本次")
+            return 0
+
+        def timed_out(signum, frame):
+            # 硬超时退出进程，不等待线程池中卡住的网络请求；内核释放 flock。
+            print("[sync] 同步超过时间限制，保留最后成功目录", flush=True)
+            os._exit(124)
+
+        previous = signal.signal(signal.SIGALRM, timed_out)
+        signal.alarm(timeout)
+        try:
+            return action()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def main():
     ap = argparse.ArgumentParser(description="自研虎牙/斗鱼白名单获取器")
     ap.add_argument("--out", default=None)
@@ -194,6 +221,10 @@ def main():
     else:
         data_root = os.environ.get("DATA") or os.path.expanduser("~")
         out_path = os.path.join(data_root, "lnmp", "allinone", "channels.json")
+    return guarded_sync(out_path, lambda: sync_channels(args, out_path))
+
+
+def sync_channels(args, out_path):
     print(f"=== 开始同步直播白名单 -> {out_path} ===")
     extra_game_ids = [value.strip() for value in args.huya_extra_game_ids.split(",") if value.strip()]
     huya = fetch_huya(pages=args.huya_pages, extra_game_ids=extra_game_ids,

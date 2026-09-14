@@ -36,7 +36,11 @@ var httpClientV4 = &http.Client{
 	Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			d := &net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}
-			return d.DialContext(ctx, "tcp4", addr)
+			conn, err := d.DialContext(ctx, "tcp4", addr)
+			if err != nil {
+				return nil, err
+			}
+			return &idleReadConn{Conn: conn, idle: time.Duration(STREAM_READ_IDLE_SECONDS) * time.Second}, nil
 		},
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
@@ -144,9 +148,14 @@ func fetchFirstBytes(rawURL string, secs int) ([]byte, int, int64, error) {
 }
 
 // ---------------- HTTP Handler :19090 ----------------
-type proxyHandler struct{}
+type proxyHandler struct{ resolve streamResolver }
 
 func (h proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	resolve := h.resolve
+	if resolve == nil {
+		resolve = resolvePlayback
+	}
 	path := strings.SplitN(r.URL.Path, "?", 2)[0]
 	// HLS 模式
 	if strings.HasPrefix(path, "/hls/") {
@@ -167,19 +176,10 @@ func (h proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not proxied: "+platform, 404)
 		return
 	}
-	resolve := resolverFor(platform)
-	if resolve == nil {
-		http.Error(w, "resolve failed", 502)
+	fresh := r.URL.Query().Get("fresh") == "1"
+	realURL := resolve(r.Context(), platform, rid, fresh)
+	if r.Context().Err() != nil {
 		return
-	}
-	fresh := strings.Contains(r.URL.RawQuery, "fresh=1")
-
-	realURL := ""
-	if fresh {
-		delCacheFor(platform, rid)
-		realURL = resolve(rid)
-	} else {
-		realURL = resolve(rid)
 	}
 	// 解析为空 = 死房/无流 → 404 (与 Python stream-proxy 对 jsdelivr 测试流一致)
 	if realURL == "" {
@@ -195,19 +195,23 @@ func (h proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 拉流: 校验 FLV 首字节, 坏则 fresh 重试一次
-	stream := openAndServe(w, platform, rid, realURL)
+	stream := openAndServe(r.Context(), w, platform, rid, realURL, resolve)
 	if stream {
 		return
 	}
 	// fresh 重试: 清缓存拿新签名 URL
 	logf("  bad stream for /%s/%s, fresh retry", platform, rid)
-	delCacheFor(platform, rid)
-	realURL2 := resolve(rid)
+	if r.Context().Err() != nil {
+		return
+	}
+	realURL2 := resolve(r.Context(), platform, rid, true)
 	if realURL2 == "" || isOfflineTestStream(realURL2) {
 		http.Error(w, "stream not FLV", 502)
 		return
 	}
-	openAndServe(w, platform, rid, realURL2)
+	if !openAndServe(r.Context(), w, platform, rid, realURL2, resolve) && r.Context().Err() == nil {
+		http.Error(w, "upstream stream unavailable", http.StatusBadGateway)
+	}
 }
 
 func delCacheFor(platform, rid string) {
@@ -334,7 +338,7 @@ func (f *flvStreamWriter) pump() bool {
 						skip = true // AVC sequence header
 					}
 				case 8:
-					if len(tag) >= 2 && tag[0]>>4 == 10 && tag[0]&0x0F == 0 {
+					if len(tag) >= 2 && tag[0]>>4 == 10 && tag[1] == 0 {
 						skip = true // AAC sequence header
 					}
 				}
@@ -401,7 +405,9 @@ func (f *flvStreamWriter) pump() bool {
 // 虎牙 CDN 对单条连接限流(~0.5-2MB 后断开), 若直接断开, 播放器感知断流→自行
 // 重连→产生 1s 黑屏卡顿。本函数在上游断开后自动清缓存换新签名 URL 重新连接,
 // 解析 FLV tag 并重写时间戳为单调递增, 在同一客户端连接内无缝续写 → 播放器无感知。
-func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
+func openAndServe(parent context.Context, w http.ResponseWriter, platform, rid, rawURL string, resolve streamResolver) bool {
+	parent, stop := context.WithCancel(parent)
+	defer stop()
 	const maxReconn = 600 // 大上限: 直播无限时长, 正常终止靠客户端断开 / resolve empty / 连续失败
 	const maxConsecFail = 3
 
@@ -418,22 +424,21 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 	// 播放器会感知 ~1s 数据缺口 → 缓冲耗尽 → 反复播放当前片段(用户实测)。
 	// 预解析让下一个 URL 在断流前就绪, 断流即连 → 缺口 ≈ 0。
 	var pfMu sync.Mutex
-	var prefetched string
+	var prefetched cacheEntry
 	var prefetching bool
 
 	startPrefetch := func() {
 		pfMu.Lock()
-		if prefetching {
+		if prefetching || parent.Err() != nil {
 			pfMu.Unlock()
 			return
 		}
 		prefetching = true
 		pfMu.Unlock()
 		go func() {
-			delCacheFor(platform, rid)
-			u := resolverFor(platform)(rid)
+			u := resolve(parent, platform, rid, true)
 			pfMu.Lock()
-			prefetched = u
+			prefetched = cacheEntry{val: u, expire: time.Now().Add(playbackTTL(platform))}
 			prefetching = false
 			pfMu.Unlock()
 		}()
@@ -441,18 +446,21 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 	takePrefetch := func() string {
 		pfMu.Lock()
 		defer pfMu.Unlock()
-		u := prefetched
-		prefetched = ""
-		return u
+		return takeFreshPrefetch(&prefetched, time.Now())
 	}
 
 	for {
+		if parent.Err() != nil {
+			return clientWrote
+		}
+		if reconn > maxReconn {
+			break
+		}
 		if reconn > 0 {
 			u := takePrefetch()
 			if u == "" || isOfflineTestStream(u) {
 				// 预解析未就绪(首连太短就断) → 同步 resolve 兜底
-				delCacheFor(platform, rid)
-				u = resolverFor(platform)(rid)
+				u = resolve(parent, platform, rid, true)
 			}
 			if u == "" || isOfflineTestStream(u) {
 				logf("  -> /%s/%s reconnect#%d resolve empty, stop", platform, rid, reconn)
@@ -462,7 +470,7 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 			logf("  -> /%s/%s reconnect#%d (%.1fMB so far)", platform, rid, reconn, float64(total)/1048576)
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(parent)
 		req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 		if err != nil {
 			cancel()
@@ -485,7 +493,9 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 					logf("  -> /%s/%s %d consec fails, stop", platform, rid, consecFail)
 					break
 				}
-				time.Sleep(500 * time.Millisecond)
+				if !waitPlayback(parent, 500*time.Millisecond) {
+					break
+				}
 				continue
 			}
 			break
@@ -502,7 +512,9 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 					logf("  -> /%s/%s %d consec fails, stop", platform, rid, consecFail)
 					break
 				}
-				time.Sleep(500 * time.Millisecond)
+				if !waitPlayback(parent, 500*time.Millisecond) {
+					break
+				}
 				continue
 			}
 			return false
@@ -511,15 +523,22 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 		first := make([]byte, 4096)
 		n, rerr := io.ReadFull(br, first)
 		isFLV := n >= 3 && string(first[:3]) == "FLV"
-
-		if !clientWrote {
-			// 首连: 必须校验 FLV, 坏流返回 false(上层 fresh retry)
-			if !isFLV || (rerr != nil && rerr != io.ErrUnexpectedEOF) {
-				logf("  bad stream /%s/%s first=%q err=%v → fresh retry", platform, rid, first[:minInt(n, 16)], rerr)
-				resp.Body.Close()
-				cancel()
+		// 重连同样检查 FLV；HTTP 200 的 HTML 错误页不能拼进视频。
+		if !isFLV || (rerr != nil && rerr != io.ErrUnexpectedEOF) {
+			resp.Body.Close()
+			cancel()
+			if !clientWrote {
 				return false
 			}
+			consecFail++
+			reconn++
+			if consecFail >= maxConsecFail || !waitPlayback(parent, 200*time.Millisecond) {
+				break
+			}
+			continue
+		}
+
+		if !clientWrote {
 			w.Header().Set("Content-Type", "video/x-flv")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(200)
@@ -536,7 +555,11 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 			if head > n {
 				head = n
 			}
-			w.Write(first[:head])
+			if _, err := w.Write(first[:head]); err != nil {
+				resp.Body.Close()
+				cancel()
+				return true
+			}
 			total = int64(head)
 		} else {
 			if head > n {
@@ -576,13 +599,22 @@ func openAndServe(w http.ResponseWriter, platform, rid, rawURL string) bool {
 		// 上游 EOF → 续流换新连接(CDN 单连接配额导致)
 		if reconn < maxReconn {
 			reconn++
-			consecFail = 0
+			if sw.written > 0 {
+				consecFail = 0
+			} else {
+				consecFail++
+			}
+			if consecFail >= maxConsecFail {
+				break
+			}
 			pfMu.Lock()
-			ready := prefetched != ""
+			ready := prefetched.val != "" && time.Now().Before(prefetched.expire)
 			pfMu.Unlock()
 			if !ready {
 				// 无预解析 URL(极少见)才 sleep, 给网络平复时间
-				time.Sleep(200 * time.Millisecond)
+				if !waitPlayback(parent, 200*time.Millisecond) {
+					break
+				}
 			}
 			continue
 		}

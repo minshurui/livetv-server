@@ -5,9 +5,9 @@ on:
   push:
     # codex/** 用于在合并前验证重构分支；main 仍负责正式发布。
     branches: [main, "codex/**"]
-    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "README.md", "dockerhub-description.md", ".github/workflows/build-image.yml"]
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "tests/**", "README.md", "dockerhub-description.md", ".github/workflows/**"]
   pull_request:
-    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "README.md", "dockerhub-description.md", ".github/workflows/build-image.yml"]
+    paths: ["Dockerfile", "docker/**", "*.go", "go.mod", "tests/**", "README.md", "dockerhub-description.md", ".github/workflows/**"]
   workflow_dispatch:                 # GitHub 页面手动触发
 
 concurrency:
@@ -31,6 +31,7 @@ jobs:
         run: |
           go vet ./...
           go test ./...
+          go test -race ./...
       - name: Python syntax checks
         run: |
           python -m py_compile docker/*.py
@@ -43,8 +44,16 @@ jobs:
       - name: Compose validation
         run: docker compose -f docker/docker-compose.yml config --quiet
 
-  verify-image:
+  live-smoke:
     needs: test
+    uses: ./.github/workflows/live-smoke.yml
+    permissions:
+      contents: read
+    with:
+      duration: "60"
+
+  verify-image:
+    needs: live-smoke
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -75,7 +84,7 @@ jobs:
 
   publish-dockerhub:
     name: Publish Docker Hub
-    needs: verify-image
+    needs: [live-smoke, verify-image]
     # 审核分支只验证、不推镜像；仅 main 的 push 或手动运行允许发布。
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     runs-on: ubuntu-latest
@@ -141,7 +150,7 @@ jobs:
 
   publish-aliyun:
     name: Publish Aliyun ACR
-    needs: verify-image
+    needs: [live-smoke, verify-image]
     # 与 Docker Hub 独立发布，任一注册表失败都不会阻止另一端尝试推送。
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     runs-on: ubuntu-latest

@@ -1,6 +1,16 @@
 name: Live Playback Smoke Test
 
 on:
+  workflow_call:
+    inputs:
+      huya_room_id:
+        required: false
+        type: string
+        default: ""
+      duration:
+        required: false
+        type: string
+        default: "60"
   workflow_dispatch:
     inputs:
       huya_room_id:
@@ -14,7 +24,7 @@ on:
         type: string
 
 concurrency:
-  group: live-smoke-${{ github.ref }}
+  group: live-smoke-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

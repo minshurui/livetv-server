@@ -39,7 +39,7 @@ class PythonHelperTests(unittest.TestCase):
     def test_resolver_reads_redirect_location(self):
         redirected = SimpleNamespace(
             returncode=0,
-            stdout="HTTP/1.1 301 Moved Permanently\r\nLocation: https://cdn.example/live.flv\r\n",
+            stdout="HTTP/1.1 302 Found\r\nLocation: https://cdn.example/live.flv\r\n",
             stderr="",
         )
         with mock.patch.object(self.stream_proxy.subprocess, "run", return_value=redirected):
@@ -47,6 +47,24 @@ class PythonHelperTests(unittest.TestCase):
                 self.stream_proxy.resolve_with_curl("/huya/1"),
                 "https://cdn.example/live.flv",
             )
+
+    def test_sync_lock_skips_overlapping_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(pathlib.Path(tmp) / "channels.json")
+            action = mock.Mock(return_value=0)
+            with open(path + ".lock", "a") as lock:
+                self.sync_channels.fcntl.flock(lock, self.sync_channels.fcntl.LOCK_EX)
+                self.assertEqual(self.sync_channels.guarded_sync(path, action), 0)
+                action.assert_not_called()
+            self.assertEqual(self.sync_channels.guarded_sync(path, action), 0)
+            action.assert_called_once()
+
+    def test_sync_lock_released_after_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(pathlib.Path(tmp) / "channels.json")
+            with self.assertRaises(RuntimeError):
+                self.sync_channels.guarded_sync(path, mock.Mock(side_effect=RuntimeError("network failure")))
+            self.assertEqual(self.sync_channels.guarded_sync(path, lambda: 7), 7)
 
     def test_extinf_escapes_attribute_quotes(self):
         value = self.sync_channels.build_extinf('game"name', "display", True)

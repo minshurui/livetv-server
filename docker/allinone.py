@@ -268,6 +268,13 @@ def resolve_douyu(rid):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def end_headers(self):
+        # 列表、离线错误和临时跳转均不可缓存。
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def log_message(self, fmt, *args):
         import sys
         sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {self.client_address[0]} {fmt % args}\n")
@@ -296,11 +303,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             alive_path = os.path.join(data_root, "lnmp", "applecms", "douyu-alive.txt")
             stamp_path = os.path.join(data_root, "lnmp", "applecms", ".douyu-health.stamp")
             try:
-                if os.path.exists(stamp_path) and os.path.exists(alive_path):
-                    age = time.time() - float(open(stamp_path).read().strip())
-                    if age < 10800:  # 3 小时内刷新过才启用过滤
-                        with open(alive_path) as f:
-                            alive = set(f.read().split())
+                snapshot_path = alive_path + ".json"
+                if os.path.exists(snapshot_path):
+                    with open(snapshot_path) as f:
+                        snapshot = json.load(f)
+                    age = time.time() - snapshot["checked_at"]
+                    version = hashlib.sha256("\n".join(sorted(e[0] for e in entries)).encode()).hexdigest()
+                    if 0 <= age < 300 and snapshot.get("catalog") == version:
+                        alive = set(snapshot["alive"])
                         sys.stderr.write(f"[m3u douyu] whitelist {len(alive)} (age {int(age)}s)\n")
             except Exception as e:
                 sys.stderr.write(f"[m3u douyu] whitelist err: {e}\n")
@@ -347,18 +357,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "douyin": resolve_douyin, "yy": resolve_yy}[platform]
         # ?fresh=1 → 强制重新解析(跳过缓存), 供 stream-proxy 重试时拿全新签名 URL
         qs = self.path.split("?", 1)[1] if "?" in self.path else ""
-        fresh = "fresh=1" in qs
+        fresh = urllib.parse.parse_qs(qs).get("fresh") == ["1"]
         target = resolver(rid, nocache=True) if fresh else resolver(rid)
         if not target:
             self.send_error(404, "offline (room not live)")
             return
-        self.send_response(301)
+        self.send_response(302)
         self.send_header("Location", target)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        # 临时签名地址不能被播放器或中间代理把第一次状态缓存下来。
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
