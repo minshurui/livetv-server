@@ -92,6 +92,7 @@ jobs:
             test "$SYNC_CHANNELS_MINUTES" = 15
             test "$IPTV_CHANNEL_SCOPE" = all
             test "$IPTV_VERIFY_STREAMS" = 1
+            test "$IPTV_VERIFY_FALLBACK" = 1
             test "$IPTV_VERIFY_TIMEOUT" = 12
             test "$IPTV_VERIFY_WORKERS" = 6
             test "$IPTV_URLS_PER_CHANNEL" = 2

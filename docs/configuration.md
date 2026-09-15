@@ -45,6 +45,8 @@ HUYA_MAX_RATIO=2000
 IPTV_MIN_CHANNELS=20
 IPTV_REJECT_VOD=1
 IPTV_BLOCKLIST=
+IPTV_VERIFY_STREAMS=1
+IPTV_VERIFY_FALLBACK=1
 ```
 
 保持 `PUBLIC_HOST` 为空。用哪个 IP 或域名下载 M3U，生成的频道 URL 就跟随哪个 Host。
@@ -215,6 +217,7 @@ http://[2001:db8::50]:8081/allinone.m3u
 | `IPTV_REJECT_VOD` | `1` | `1` 排除明显 VOD，`0` 允许 |
 | `IPTV_CHANNEL_SCOPE` | `all` | `all` 保留模板中的央视、卫视和地方频道；`cctv_satellite` 只发布 CCTV/CETV 和已知省级卫视 |
 | `IPTV_VERIFY_STREAMS` | `1` | 发布前使用容器内 FFmpeg 解码首帧，失败线路不写入最终列表 |
+| `IPTV_VERIFY_FALLBACK` | `1` | FFmpeg 对全部候选均失败时，降级发布 iptv-api 最新测速结果，防止旧失效快照永久锁死；`0` 为绝对严格模式 |
 | `IPTV_VERIFY_TIMEOUT` | `12` | 每条 IPTV 线路验证超时秒数 |
 | `IPTV_VERIFY_WORKERS` | `6` | 并行验证线路数量；低性能 NAS 可降到 `2` |
 | `IPTV_URLS_PER_CHANNEL` | `2` | 每频道最多发布的已验证线路数；`0` 不限制 |

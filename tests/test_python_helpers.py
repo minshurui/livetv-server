@@ -23,12 +23,14 @@ class PythonHelperTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         for setting in ("HUYA_CACHE_TTL=30", "DOUYU_CACHE_TTL=30",
                         "STREAM_READ_IDLE_SECONDS=10", "SYNC_CHANNELS_MINUTES=15",
-                        "IPTV_CHANNEL_SCOPE=all", "IPTV_VERIFY_STREAMS=1"):
+                        "IPTV_CHANNEL_SCOPE=all", "IPTV_VERIFY_STREAMS=1",
+                        "IPTV_VERIFY_FALLBACK=1"):
             self.assertIn(setting + " \\", dockerfile)
         self.assertNotIn("CACHE_TTL=300", dockerfile)
         env_example = (ROOT / "docker/.env.example").read_text()
         self.assertIn("HUYA_CACHE_TTL=30", env_example)
         self.assertIn("DOUYU_CACHE_TTL=30", env_example)
+        self.assertIn("IPTV_VERIFY_FALLBACK=1", env_example)
 
     @classmethod
     def setUpClass(cls):
@@ -204,13 +206,14 @@ https://blocked.example/live.m3u8
 
     def test_filter_iptv_keeps_per_entry_options(self):
         source = """#EXTM3U
-#EXTINF:-1,UDP直播
+#EXTINF:-1 tvg-logo="https://img.example/iptv.png",UDP直播
 #EXTVLCOPT:http-user-agent=example
 udp://@239.0.0.1:1234
 """
         result, count, rejected = self.filter_iptv.filter_m3u(source, [])
         self.assertEqual(count, 1)
         self.assertFalse(rejected)
+        self.assertIn('tvg-logo="https://img.example/iptv.png"', result)
         self.assertIn("#EXTVLCOPT:http-user-agent=example", result)
         self.assertIn("udp://@239.0.0.1:1234", result)
 
@@ -289,6 +292,54 @@ https://good.example/cctv1-c.m3u8
                 "--min-channels", "2",
             ]
             with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(self.filter_iptv.main(), 3)
+            self.assertEqual(target.read_text(), "last-good\n")
+
+    def test_filter_cli_falls_back_only_when_every_probe_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp, "source.m3u")
+            target = pathlib.Path(tmp, "published.m3u")
+            source.write_text("""#EXTM3U
+#EXTINF:-1 tvg-logo="https://img.example/a.png",频道一
+https://fresh.example/one.m3u8
+#EXTINF:-1 tvg-logo="https://img.example/b.png",频道二
+https://fresh.example/two.m3u8
+""")
+            argv = [
+                "filter_iptv.py", "--input", str(source), "--output", str(target),
+                "--min-channels", "2", "--verify-streams",
+                "--fallback-on-probe-outage",
+            ]
+            with mock.patch.object(
+                self.filter_iptv, "verify_channel_candidates",
+                return_value=([], 2, 0),
+            ), mock.patch.object(sys, "argv", argv):
+                self.assertEqual(self.filter_iptv.main(), 0)
+            published = target.read_text()
+            self.assertIn("fresh.example/one.m3u8", published)
+            self.assertIn('tvg-logo="https://img.example/a.png"', published)
+
+    def test_filter_cli_does_not_fallback_after_partial_probe_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp, "source.m3u")
+            target = pathlib.Path(tmp, "published.m3u")
+            source.write_text("""#EXTM3U
+#EXTINF:-1,频道一
+https://fresh.example/one.m3u8
+#EXTINF:-1,频道二
+https://fresh.example/two.m3u8
+""")
+            target.write_text("last-good\n")
+            argv = [
+                "filter_iptv.py", "--input", str(source), "--output", str(target),
+                "--min-channels", "2", "--verify-streams",
+                "--fallback-on-probe-outage",
+            ]
+            _, entries = self.filter_iptv.parse_entries(source.read_text())
+            with mock.patch.object(
+                self.filter_iptv, "verify_channel_candidates",
+                return_value=([entries[0]], 1, 0),
+            ), mock.patch.object(sys, "argv", argv):
                 self.assertEqual(self.filter_iptv.main(), 3)
             self.assertEqual(target.read_text(), "last-good\n")
 

@@ -4,7 +4,9 @@
 The upstream result is only a candidate snapshot.  This final gate limits the
 published channel set, rejects structural VOD entries, and can require FFmpeg to
 decode a video frame from every retained URL.  Failed refreshes never overwrite
-the last known-good snapshot.
+the last known-good snapshot.  An opt-in circuit breaker can publish the fresh,
+upstream-tested snapshot when the local FFmpeg probe rejects every candidate;
+this prevents a broken probe from pinning an expired snapshot forever.
 """
 
 from __future__ import annotations
@@ -375,6 +377,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verify-timeout", type=float, default=12)
     parser.add_argument("--verify-workers", type=int, default=6)
     parser.add_argument("--urls-per-channel", type=int, default=2)
+    parser.add_argument(
+        "--fallback-on-probe-outage", action="store_true",
+        help=(
+            "若 FFmpeg 对所有候选均失败，则降级发布 iptv-api 的最新测速结果；"
+            "仅用于防止验证器故障导致 IPTV 整体不可用"
+        ),
+    )
     return parser
 
 
@@ -386,18 +395,46 @@ def publish(args: argparse.Namespace) -> int:
         print(f"[filter] 输入不存在: {source}")
         return 2
 
+    source_text = source.read_text(encoding="utf-8-sig", errors="replace")
     blocklist = load_blocklist(args.blocklist_file, args.blocklist)
-    result, count, rejected = filter_m3u(
-        source.read_text(encoding="utf-8-sig", errors="replace"),
-        blocklist,
+    filter_options = dict(
         reject_vod=not args.allow_vod,
         channel_scope=args.channel_scope,
-        verify_streams=args.verify_streams,
         verify_timeout=max(2, min(args.verify_timeout, 60)),
         verify_workers=max(1, min(args.verify_workers, 32)),
         urls_per_channel=max(0, args.urls_per_channel),
     )
+    result, count, rejected = filter_m3u(
+        source_text,
+        blocklist,
+        verify_streams=args.verify_streams,
+        **filter_options,
+    )
     channels = unique_channel_count(result)
+    degraded = False
+    if (
+        args.verify_streams
+        and args.fallback_on_probe_outage
+        and channels == 0
+    ):
+        fallback_result, fallback_count, fallback_rejected = filter_m3u(
+            source_text,
+            blocklist,
+            verify_streams=False,
+            **filter_options,
+        )
+        fallback_channels = unique_channel_count(fallback_result)
+        if fallback_channels >= max(1, args.min_channels):
+            probe_failures = rejected.get("unplayable", 0)
+            result, count, rejected = fallback_result, fallback_count, fallback_rejected
+            if probe_failures:
+                rejected["probe_outage"] = probe_failures
+            channels = fallback_channels
+            degraded = True
+            print(
+                "[filter] 警告: FFmpeg 首帧验证 0 条成功，判断为本地探测故障；"
+                "降级发布 iptv-api 最新测速结果，下一周期会自动重试严格验证"
+            )
     if channels < max(1, args.min_channels):
         print(
             f"[filter] 仅剩 {channels} 个可用频道/{count} 条线路，"
@@ -407,7 +444,12 @@ def publish(args: argparse.Namespace) -> int:
 
     atomic_write(Path(args.output), result)
     details = ", ".join(f"{key}={value}" for key, value in sorted(rejected.items())) or "无"
-    result_kind = "已验证线路" if args.verify_streams else "结构过滤后线路"
+    if degraded:
+        result_kind = "上游已测速线路（本地验证降级）"
+    elif args.verify_streams:
+        result_kind = "已验证线路"
+    else:
+        result_kind = "结构过滤后线路"
     print(
         f"[filter] 已发布 {channels} 个频道/{count} 条{result_kind}；"
         f"耗时 {time.monotonic() - started:.1f}s；剔除: {details}"

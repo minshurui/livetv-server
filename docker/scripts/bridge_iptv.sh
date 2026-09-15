@@ -11,6 +11,7 @@ VERIFY_STREAMS="${IPTV_VERIFY_STREAMS:-1}"
 VERIFY_TIMEOUT="${IPTV_VERIFY_TIMEOUT:-12}"
 VERIFY_WORKERS="${IPTV_VERIFY_WORKERS:-6}"
 URLS_PER_CHANNEL="${IPTV_URLS_PER_CHANNEL:-2}"
+VERIFY_FALLBACK="${IPTV_VERIFY_FALLBACK:-1}"
 
 [ -f "$SRC" ] || exit 0
 
@@ -31,6 +32,9 @@ if [ "${IPTV_REJECT_VOD:-1}" = "0" ]; then
 fi
 if [ "$VERIFY_STREAMS" = "1" ]; then
   set -- "$@" --verify-streams
+  if [ "$VERIFY_FALLBACK" = "1" ]; then
+    set -- "$@" --fallback-on-probe-outage
+  fi
 fi
 
 if output=$(python3 "$@" 2>&1); then

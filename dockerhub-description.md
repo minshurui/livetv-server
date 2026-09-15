@@ -45,6 +45,7 @@ services:
       DOUYU_GROUP_MODE: compact
       IPTV_CHANNEL_SCOPE: all
       IPTV_VERIFY_STREAMS: "1"
+      IPTV_VERIFY_FALLBACK: "1"
       IPTV_REJECT_VOD: "1"
       IPTV_MIN_CHANNELS: "20"
     volumes:
@@ -198,8 +199,10 @@ data/
 ## 录播和坏源过滤
 
 最终列表默认保留频道模板中的央视、卫视和地方频道。每个候选地址会由
-FFmpeg 实际解码首帧，每频道最多发布 2 条通过验证的线路。只需要央视和
-省级卫视时设置 `IPTV_CHANNEL_SCOPE=cctv_satellite`。
+FFmpeg 实际解码首帧，每频道最多发布 2 条通过验证的线路。若容器里的探测器对
+全部候选均失败，默认会降级使用 iptv-api 最新测速结果，避免旧失效快照永久锁死；
+下个更新周期仍会重试严格验证。绝对严格模式可设 `IPTV_VERIFY_FALLBACK=0`。
+只需要央视和省级卫视时设置 `IPTV_CHANNEL_SCOPE=cctv_satellite`。
 
 镜像会过滤正时长 `EXTINF`、MP4/MKV 等明显 VOD 文件、部分结束型 HLS 和用户黑名单。发现已经人工确认的循环录播后：
 

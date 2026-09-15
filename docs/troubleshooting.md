@@ -235,6 +235,7 @@ docker exec livetv tail -n 80 /data/lnmp/logs/bridge.log
 | `blocklist=N` | 命中用户黑名单 | 检查 `iptv-blocklist.txt` |
 | `outside_scope=N` | 当前启用了央视/卫视精简模式 | 需要地方频道时设置 `IPTV_CHANNEL_SCOPE=all` |
 | `unplayable=N` | FFmpeg 无法在超时内解码视频首帧 | 检查订阅质量和容器网络 |
+| `probe_outage=N` | 所有候选都被本地探测器拒绝，已降级使用上游最新测速结果 | 检查容器 DNS/出网；下周期会自动重试 |
 | `url_limit=N` | 同频道通过验证的线路超过发布上限 | 正常过滤；可调整 `IPTV_URLS_PER_CHANNEL` |
 | `positive_duration=N` | M3U 标记了正时长，按 VOD 排除 | 确认是否应设置 `IPTV_REJECT_VOD=0` |
 | `vod_file=N` | URL 像 MP4/MKV 等文件 | 正常过滤；误判时关闭 VOD 过滤 |
@@ -254,9 +255,15 @@ docker exec livetv /opt/livetv/scripts/bridge_iptv.sh
 docker exec livetv tail -n 50 /data/lnmp/logs/bridge.log
 ```
 
-发布前 FFmpeg 会实际解码每条候选线路的首帧，无法解码的地址不会进入最终
-列表。低性能 NAS 可以把
-`IPTV_VERIFY_WORKERS` 从 `6` 降为 `2`，但不建议关闭 `IPTV_VERIFY_STREAMS`。
+发布前 FFmpeg 会实际解码每条候选线路的首帧，正常情况下无法解码的地址不会
+进入最终列表。若日志显示“首帧验证 0 条成功”，默认的
+`IPTV_VERIFY_FALLBACK=1` 会把它视为本地探测器或网络异常，临时发布 iptv-api
+已经测速过的最新结果，避免旧的过期快照让所有频道同时失效；下个周期仍会重新
+尝试严格验证。若宁可 IPTV 暂时为空也不接受降级，可设为 `0`。
+
+低性能 NAS 可以把 `IPTV_VERIFY_WORKERS` 从 `6` 降为 `2`，但不建议关闭
+`IPTV_VERIFY_STREAMS`。`tvg-logo` 和每条线路的 `#EXTVLCOPT` 会原样保留，
+该筛选不会改动虎牙/斗鱼的本地头像缓存。
 
 ## 列表能下载但频道播放失败
 
